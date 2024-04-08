@@ -1,5 +1,5 @@
 // config.js
 module.exports = {
-    TELEGRAM_BOT_TOKEN: '6925438601:AAGSY9fR649FVevca7kLp0hJ-rMU0s5W4bk',
+    TELEGRAM_BOT_TOKEN: '6878912917:AAGGPxYGh5Nx5vxqI6PD5luQpKsgGTWhegE',
   };
   
