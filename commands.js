@@ -34,7 +34,7 @@ module.exports = {
       ]);
 
       const ethPriceResponse = await api.getTokenDetails('0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2');
-      const bscPriceResponse = await api.getTokenDetails('0xb8c77482e45f1f44de1745f52c74426c631bdd52');
+      const bscPriceResponse = await api.getTokenDetails('9gP2kCy3wA1ctvYWQk75guqXuHfrEomqydHLtcTCqiLa');
 
       const ethPrice = ethPriceResponse.pairs.length > 0 ? ethPriceResponse.pairs[0].priceUsd.toFixed(2) : 'N/A';
       const bscPrice = bscPriceResponse.pairs.length > 0 ? bscPriceResponse.pairs[0].priceUsd.toFixed(2) : 'N/A';
@@ -178,10 +178,10 @@ module.exports = {
           const ethBalanceInEther = ethers.formatEther(ethBalance);
           message += `ETH Balance: ${Number(ethBalanceInEther).toFixed(4)} ETH\n`;
 
-          // Get BSC balance
+          // Get BNB balance
           const bscBalance = await bscProvider.getBalance(wallet.address);
           const bscBalanceInBNB = ethers.formatEther(bscBalance);
-          message += `BSC Balance: ${Number(bscBalanceInBNB).toFixed(4)} BNB\n`;
+          message += `BNB Balance: ${Number(bscBalanceInBNB).toFixed(4)} BNB\n`;
         } catch (error) {
           console.error('Error fetching balances:', error);
           message += `Balance: Error fetching balance\n`;
@@ -483,7 +483,7 @@ try {
   const ethBalance = await providers.eth.getBalance(address);
   balances.eth = ethers.formatEther(ethBalance);
 
-  // Get BSC balance
+  // Get BNB balance
   const bscBalance = await providers.bsc.getBalance(address);
   balances.bsc = ethers.formatEther(bscBalance);
 } catch (error) {
