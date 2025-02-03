@@ -1,4 +1,3 @@
-// commands.js
 const { Markup } = require('telegraf');
 const { ethers } = require('ethers');
 const middlewares = require('./middlewares');
@@ -9,6 +8,8 @@ const BASE_URL = 'https://fets-database.onrender.com/api/future-edge';
 const userStates = new Map();
 const importRequestMessages = new Map();
 
+
+
 module.exports = {
   userStates,
 
@@ -17,19 +18,16 @@ module.exports = {
       const firstName = ctx.from.first_name || 'User';
       const Homekeyboard = Markup.inlineKeyboard([
         [
-          Markup.button.callback(`🚨Token Scanner`, 'scanner'),
+          Markup.button.callback(`📈Buy&Sell`, 'buy&sell'),
           Markup.button.callback(`👝Wallet`, 'wallet'),
         ],
         [
-          Markup.button.callback(`📊Active Trades`, 'active'),
+          Markup.button.callback(`📊Position`, 'positions'),
           Markup.button.callback(`⚙️Settings`, 'settings'),
         ],
         [
-          Markup.button.callback(`🌉Bridge`, 'bridge'),
+          Markup.button.callback(`🚨Token Scanner`, 'scanner'),
           Markup.button.callback(`📤Transfer`, 'transfer'),
-        ],
-        [
-          Markup.button.callback(`🔫Snipe`, 'snipe'),
         ],
       ]);
 
@@ -44,15 +42,14 @@ module.exports = {
         `The *Fastest*⚡ and most *Reliable*🛡️ \n` +
         `🥏 Token Scanner \n` +
         `🥏 Trade Bot \n\n` +
+
         `Paste📝 any Token Contract Address on *Eth || Bsc* on this bot to Scan & Trade \n\n` +
+
         `*Eth || Bsc* \n` +
         `Wallet:*Not Connected*\n \n` +
         `Price $${ethPrice}(ETH/USDT) \n` +
-        `Price $${bscPrice}(BNB/USDT) \n\n` +
-        `👁️ 0 Tracked Token(s) \n` +
-        `🙈 0 Position(s)`,
-        Homekeyboard,
-        Markup.keyboard(['/help']).resize()
+        `Price $${bscPrice}(BNB/USDT) \n\n`,
+        Homekeyboard
       );
     } catch (error) {
       console.error('Error:', error.message);
@@ -64,15 +61,58 @@ module.exports = {
     ctx.reply('You asked for help!');
   },
 
-  async scannerCommand(ctx) {
+
+  
+  async buysellCommand(ctx) {
     try {
       if (ctx.callbackQuery) {
         await ctx.answerCbQuery();
       }
-      await ctx.reply('🔍 Drop your token address below so Future Edge would give it a quick Scan and Audit');
+      await ctx.reply('🔍 Paste token address to begin buy & sell ↔️');
     } catch (error) {
-      console.error('Error in scanner command:', error);
+      console.error('Error in buy&sell command:', error);
       await ctx.reply('Error processing the request. Please try again later.');
+    }
+  },
+
+  async scanner(ctx) {
+    try {
+      if (ctx.callbackQuery) {
+        await ctx.answerCbQuery();
+      }
+      await ctx.reply('🔍 Paste token address to scan');
+    } catch (error) {
+      console.error('Error in buy&sell command:', error);
+      await ctx.reply('Error processing the request. Please try again later.');
+    }
+  },
+
+  async transferCommand(ctx) {
+    try {
+      if (ctx.callbackQuery) {
+        await ctx.answerCbQuery();
+      }
+
+      const telegramId = ctx.from.id.toString();
+      const response = await axios.get(`${BASE_URL}/wallet/evm/${telegramId}`);
+      const wallets = response.data;
+
+      if (!wallets || wallets.length === 0) {
+        return ctx.reply('❌ Please set up a wallet first using the /wallet command');
+      }
+
+      const transferKeyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback('Transfer ETH', 'transfer_eth'),
+          Markup.button.callback('Transfer BNB', 'transfer_bnb')
+        ],
+        [Markup.button.callback('🔙 Back to Home', 'home')]
+      ]);
+
+      await ctx.reply('Select which coin to transfer:', transferKeyboard);
+    } catch (error) {
+      console.error('Error in transfer command:', error);
+      await ctx.reply('Error accessing wallet information. Please try again.');
     }
   },
 
@@ -166,7 +206,7 @@ module.exports = {
       
       // Initialize providers
       const ethProvider = new ethers.JsonRpcProvider(`https://eth-mainnet.g.alchemy.com/v2/nRKZNN7FV_lFECaCuzF1jGPPkcCD8ogi`);
-      const bscProvider = new ethers.JsonRpcProvider('https://quaint-neat-cherry.bsc.quiknode.pro/6bca20cae39a942e13525f4048fc30211405a7b5/');
+      const bscProvider = new ethers.JsonRpcProvider('https://bnb-mainnet.g.alchemy.com/v2/nRKZNN7FV_lFECaCuzF1jGPPkcCD8ogi');
 
       for (const wallet of existingWallets) {
         message += `*${wallet.name}:*\n`;
@@ -270,6 +310,8 @@ module.exports = {
     }
   },
 
+  
+
   setupWalletActions(bot) {
     // Create new wallet action
     bot.action('create_new', async (ctx) => {
@@ -313,6 +355,35 @@ module.exports = {
       );
     });
 
+    // Handle wallet actions
+    bot.action(['import_1', 'import_2'], async (ctx) => {
+      try {
+        await ctx.answerCbQuery();
+        const walletNumber = ctx.match[0].endsWith('1') ? 1 : 2;
+        
+        // Send message with force reply for private key
+        const message = await ctx.reply(
+          '🔐 Please send your private key:',
+          {
+            reply_markup: {
+              force_reply: true,
+              selective: true
+            }
+          }
+        );
+
+        userStates.set(ctx.from.id, {
+          action: 'import',
+          walletNumber,
+          requestMessageId: message.message_id
+        });
+
+      } catch (error) {
+        console.error('Error initiating wallet import:', error);
+        await ctx.reply('❌ Error starting import process. Please try again.');
+      }
+    });
+
     // Handle export wallet selection
     bot.action(['export_1', 'export_2'], async (ctx) => {
       try {
@@ -351,164 +422,384 @@ module.exports = {
       await this.walletCommand(ctx);
     });
 
- // Delete wallet action (continued)
- bot.action('delete', async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.reply('Select which wallet to delete:',
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback('Delete Wallet 1', 'delete_1'),
-        Markup.button.callback('Delete Wallet 2', 'delete_2')
-      ],
-      [Markup.button.callback('🔙 Back', 'wallet')]
-    ])
-  );
-});
+    // Delete wallet action
+    bot.action('delete', async (ctx) => {
+      await ctx.answerCbQuery();
+      await ctx.reply('Select which wallet to delete:',
+        Markup.inlineKeyboard([
+          [
+            Markup.button.callback('Delete Wallet 1', 'delete_1'),
+            Markup.button.callback('Delete Wallet 2', 'delete_2')
+          ],
+          [Markup.button.callback('🔙 Back', 'wallet')]
+        ])
+      );
+    });
 
-// Delete wallet handlers
-bot.action(['delete_1', 'delete_2'], async (ctx) => {
-  await ctx.answerCbQuery();
-  const telegramId = ctx.from.id.toString();
-  const walletNumber = ctx.callbackQuery.data.endsWith('1') ? '1' : '2';
-  
+    // Handle delete wallet selection
+    bot.action(['delete_1', 'delete_2'], async (ctx) => {
+      await ctx.answerCbQuery();
+      const telegramId = ctx.from.id.toString();
+      const walletNumber = ctx.callbackQuery.data.endsWith('1') ? '1' : '2';
+      
+      try {
+        await axios.delete(`${BASE_URL}/wallet/evm/${telegramId}/wallet${walletNumber}`);
+        await ctx.reply(`Wallet ${walletNumber} deleted successfully`);
+        await this.walletCommand(ctx);
+      } catch (error) {
+        console.error(`Error deleting wallet ${walletNumber}:`, error);
+        await ctx.reply('Error deleting wallet. Please try again.');
+      }
+    });
+
+// Handle transfer actions
+bot.action(['transfer_eth', 'transfer_bnb'], async (ctx) => {
   try {
-    await axios.delete(`${BASE_URL}/wallet/evm/${telegramId}/wallet${walletNumber}`);
-    await ctx.reply(`Wallet ${walletNumber} deleted successfully`);
-    await this.walletCommand(ctx);
+      await ctx.answerCbQuery();
+      const coin = ctx.match[0].includes('eth') ? 'ETH' : 'BNB';
+      
+      const telegramId = ctx.from.id.toString();
+      const response = await axios.get(`${BASE_URL}/wallet/evm/${telegramId}`);
+      const wallets = response.data;
+
+      if (!wallets || wallets.length === 0) {
+          return ctx.reply('❌ No wallets found. Please set up a wallet first.');
+      }
+
+      // Initialize provider based on coin
+      const provider = coin === 'ETH'
+          ? new ethers.JsonRpcProvider(`https://eth-mainnet.g.alchemy.com/v2/nRKZNN7FV_lFECaCuzF1jGPPkcCD8ogi`)
+          : new ethers.JsonRpcProvider('https://bnb-mainnet.g.alchemy.com/v2/nRKZNN7FV_lFECaCuzF1jGPPkcCD8ogi');
+
+      // Get balances for all wallets
+      const walletsWithBalance = await Promise.all(wallets.map(async (wallet) => {
+          try {
+              const balance = await provider.getBalance(wallet.address);
+              return {
+                  ...wallet,
+                  balance: ethers.formatEther(balance)
+              };
+          } catch (error) {
+              console.error(`Error fetching balance for ${wallet.name}:`, error);
+              return {
+                  ...wallet,
+                  balance: '0.0000'
+              };
+          }
+      }));
+
+      // Create message with balances
+      let message = `Select wallet to transfer ${coin} from:\n\nAvailable Balances:\n`;
+      walletsWithBalance.forEach(wallet => {
+          message += `👛 Wallet ${wallet.name.slice(-1)}: ${Number(wallet.balance).toFixed(4)} ${coin}\n`;
+      });
+
+      const walletButtons = walletsWithBalance.map(wallet => ([
+          Markup.button.callback(
+              `Select Wallet ${wallet.name.slice(-1)} (${Number(wallet.balance).toFixed(4)} ${coin})`,
+              `select_transfer_${coin.toLowerCase()}_${wallet.name}`
+          )
+      ]));
+
+      const keyboard = Markup.inlineKeyboard([
+          ...walletButtons,
+          [Markup.button.callback('❌ Cancel', 'cancel_transfer')]
+      ]);
+
+      await ctx.reply(message, keyboard);
   } catch (error) {
-    console.error(`Error deleting wallet ${walletNumber}:`, error);
-    await ctx.reply('Error deleting wallet. Please try again.');
+      console.error('Error in transfer action:', error);
+      await ctx.reply('❌ Error initiating transfer. Please try again.');
   }
 });
 
-// Create wallet handlers
-bot.action(['create_1', 'create_2'], async (ctx) => {
-  await ctx.answerCbQuery();
-  const walletNumber = ctx.callbackQuery.data.endsWith('1') ? 1 : 2;
-  await this.handleReplaceWallet(ctx, walletNumber);
+// Handle wallet selection for transfer
+bot.action(/select_transfer_(eth|bnb)_wallet(\d)/, async (ctx) => {
+  try {
+      await ctx.answerCbQuery();
+      const [, coin, walletNum] = ctx.match;
+      const upperCoin = coin.toUpperCase();
+
+      // Get wallet balance before proceeding
+      const telegramId = ctx.from.id.toString();
+      const response = await axios.get(`${BASE_URL}/wallet/evm/${telegramId}`);
+      const wallet = response.data.find(w => w.name === `wallet${walletNum}`);
+
+      if (!wallet) {
+          throw new Error('Wallet not found');
+      }
+
+      // Get current balance
+      const provider = upperCoin === 'ETH'
+          ? new ethers.JsonRpcProvider(`https://eth-mainnet.g.alchemy.com/v2/nRKZNN7FV_lFECaCuzF1jGPPkcCD8ogi`)
+          : new ethers.JsonRpcProvider('https://bnb-mainnet.g.alchemy.com/v2/nRKZNN7FV_lFECaCuzF1jGPPkcCD8ogi');
+
+      const balance = await provider.getBalance(wallet.address);
+      const formattedBalance = ethers.formatEther(balance);
+
+      // Send message with force reply for recipient address
+      const message = await ctx.reply(
+          `📍 Enter the recipient address:\n\n` +
+          `Selected: Wallet ${walletNum}\n` +
+          `Available Balance: ${Number(formattedBalance).toFixed(4)} ${upperCoin}`,
+          {
+              reply_markup: {
+                  force_reply: true,
+                  selective: true
+              }
+          }
+      );
+
+      // Store wallet info in state
+      userStates.set(ctx.from.id, {
+          action: 'transfer_address',
+          coin: upperCoin,
+          sourceWallet: `wallet${walletNum}`,
+          balance: formattedBalance,
+          requestMessageId: message.message_id
+      });
+
+  } catch (error) {
+      console.error('Error in transfer wallet selection:', error);
+      await ctx.reply('❌ Error processing selection. Please try again.');
+  }
 });
 
-// Import wallet handlers
-bot.action(['import_1', 'import_2'], async (ctx) => {
-  await ctx.answerCbQuery();
-  const walletNumber = ctx.callbackQuery.data.endsWith('1') ? 1 : 2;
+    // Cancel transfer action
+    bot.action('cancel_transfer', async (ctx) => {
+      try {
+        await ctx.answerCbQuery();
+        await ctx.deleteMessage();
+        userStates.delete(ctx.from.id);
+      } catch (error) {
+        console.error('Error cancelling transfer:', error);
+      }
+    });
+
+    // Create wallet handlers
+    bot.action(['create_1', 'create_2'], async (ctx) => {
+      await ctx.answerCbQuery();
+      const walletNumber = ctx.callbackQuery.data.endsWith('1') ? 1 : 2;
+      await this.handleReplaceWallet(ctx, walletNumber);
+    });
+
+    // Home action
+    bot.action('home', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.startCommand(ctx);
+    });
+
+    // General wallet menu action
+    bot.action('wallet', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.walletCommand(ctx);
+    });
+
+    // Handle text messages
+    bot.on('text', async (ctx) => {
+      const userId = ctx.from.id;
+      const userState = userStates.get(userId);
+
+      // Only process messages that are replies to our requests
+      if (!userState || !ctx.message.reply_to_message || 
+          ctx.message.reply_to_message.message_id !== userState.requestMessageId) {
+        return;
+      }
+
+      try {
+        switch (userState.action) {
+          case 'import':
+            await handleImportReply(ctx, userState);
+            break;
+          case 'transfer_address':
+            await handleTransferAddressReply(ctx, userState);
+            break;
+          case 'transfer_amount':
+            await handleTransferAmountReply(ctx, userState);
+            break;
+        }
+      } catch (error) {
+        console.error('Error processing message:', error);
+        await ctx.reply('❌ Error processing your request. Please try again.');
+        userStates.delete(userId);
+      }
+    });
+
+      // Scanner action
+      bot.action('buy&sell', async (ctx) => {
+        await ctx.answerCbQuery();
+        await this.buy&sellCommand(ctx);
+      });
   
-  // Send message with force reply
-  const message = await ctx.reply('Please send me the private key for the wallet:', {
-    reply_markup: {
-      force_reply: true,
-      selective: true
-    },
-    reply_to_message_id: ctx.callbackQuery.message.message_id
-  });
+      // Wallet action
+      bot.action('wallet', async (ctx) => {
+        await ctx.answerCbQuery();
+        await this.walletCommand(ctx);
+      });
+  
+      // Transfer action
+      bot.action('transfer', async (ctx) => {
+        await ctx.answerCbQuery();
+        await this.transferCommand(ctx);
+      });
+  
+      // Active trades action
+      bot.action('active', async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.reply('Active trades feature coming soon!');
+      });
+  
+      // Settings action
+      bot.action('settings', async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.reply('Settings feature coming soon!');
+      });
+  
+      // Bridge action
+      bot.action('bridge', async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.reply('Bridge feature coming soon!');
+      });
+  
+      // Snipe action
+      bot.action('snipe', async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.reply('Snipe feature coming soon!');
+      });
+  
+      // Home action
+      bot.action('home', async (ctx) => {
+        await ctx.answerCbQuery();
+        await this.startCommand(ctx);
+      });
+  },
 
-  // Store the message ID and wallet number for this import request
-  userStates.set(ctx.from.id, { 
-    action: 'import', 
-    walletNumber,
-    requestMessageId: message.message_id 
-  });
-});
-
-// Home action
-bot.action('home', async (ctx) => {
-  await ctx.answerCbQuery();
-  await this.startCommand(ctx);
-});
-
-// General wallet menu action
-bot.action('wallet', async (ctx) => {
-  await ctx.answerCbQuery();
-  await this.walletCommand(ctx);
-});
-
-// Buy action handler
-bot.action('buy', async (ctx) => {
-  await ctx.answerCbQuery();
-  // Implement buy functionality here
-  await ctx.reply('Buy functionality coming soon!');
-});
-
-// Handle text messages for wallet import
-bot.on('text', async (ctx) => {
-  const userId = ctx.from.id;
-  const userState = userStates.get(userId);
-
-  // Check if this is an active import request
-  if (userState && userState.action === 'import') {
-    // Check if this message is a reply to our import request
-    if (!ctx.message.reply_to_message || 
-        ctx.message.reply_to_message.message_id !== userState.requestMessageId) {
-      // Ignore messages that aren't proper replies
-      return;
-    }
-
+  // Helper functions for handling replies
+  async handleImportReply(ctx, userState) {
     try {
       const privateKey = ctx.message.text.trim();
       
-      // Delete the message containing the private key for security
+      // Delete private key message
       try {
         await ctx.deleteMessage();
       } catch (error) {
-        console.log('Could not delete message:', error);
+        console.log('Could not delete private key message:', error);
       }
       
-      await importWallet(ctx, privateKey, userState.walletNumber);
-      userStates.delete(userId);
+      await this.importWallet(ctx, privateKey, userState.walletNumber);
 
-      // Also delete the original request message for security
+      // Delete request message
       try {
         await ctx.telegram.deleteMessage(ctx.chat.id, userState.requestMessageId);
       } catch (error) {
         console.log('Could not delete request message:', error);
       }
     } catch (error) {
-      console.error('Error processing private key:', error);
-      await ctx.reply('Invalid private key format. Please try again.');
-      userStates.delete(userId);
+      throw new Error('Invalid private key format');
+    } finally {
+      userStates.delete(ctx.from.id);
+    }
+  },
+
+  async handleTransferAddressReply(ctx, userState) {
+    try {
+      const address = ctx.message.text.trim();
+      
+      if (!this.isValidAddress(address)) {
+        throw new Error('Invalid address format');
+      }
+
+      // Send message with force reply for amount
+      const message = await ctx.reply(
+        `💰 Enter the amount of ${userState.coin} to transfer:`,
+        {
+          reply_markup: {
+            force_reply: true,
+            selective: true
+          }
+        }
+      );
+
+      userStates.set(ctx.from.id, {
+        ...userState,
+        action: 'transfer_amount',
+        destinationAddress: address,
+        requestMessageId: message.message_id
+      });
+
+    } catch (error) {
+      throw new Error('Invalid address format');
+    }
+  },
+
+  async handleTransferAmountReply(ctx, userState) {
+    try {
+      const amount = parseFloat(ctx.message.text.trim());
+      
+      if (isNaN(amount) || amount <= 0) {
+        throw new Error('Invalid amount');
+      }
+
+      const telegramId = ctx.from.id.toString();
+      const response = await axios.get(`${BASE_URL}/wallet/evm/${telegramId}`);
+      const wallet = response.data.find(w => w.name === userState.sourceWallet);
+
+      if (!wallet) {
+        throw new Error('Wallet not found');
+      }
+
+      const provider = userState.coin === 'ETH'
+        ? new ethers.JsonRpcProvider(`https://eth-mainnet.g.alchemy.com/v2/nRKZNN7FV_lFECaCuzF1jGPPkcCD8ogi`)
+        : new ethers.JsonRpcProvider('https://quaint-neat-cherry.bsc.quiknode.pro/6bca20cae39a942e13525f4048fc30211405a7b5/');
+
+      const walletSigner = new ethers.Wallet(wallet.private_key, provider);
+      
+      const balance = await provider.getBalance(wallet.address);
+      const formattedBalance = ethers.formatEther(balance);
+
+      if (amount > parseFloat(formattedBalance)) {
+        throw new Error(`Insufficient balance. Available: ${formattedBalance} ${userState.coin}`);
+      }
+
+      const tx = await walletSigner.sendTransaction({
+        to: userState.destinationAddress,
+        value: ethers.parseEther(amount.toString())
+      });
+
+      const explorerUrl = userState.coin === 'ETH'
+        ? `https://etherscan.io/tx/${tx.hash}`
+        : `https://bscscan.com/tx/${tx.hash}`;
+
+      await ctx.reply(
+        `✅ Transfer initiated!\n\n` +
+        `Amount: ${amount} ${userState.coin}\n` +
+        `To: ${userState.destinationAddress}\n\n` +
+        `🔗 [View on Explorer](${explorerUrl})`,
+        { parse_mode: 'Markdown' }
+      );
+
+    } catch (error) {
+      throw new Error(error.message);
+    } finally {
+      userStates.delete(ctx.from.id);
+    }
+  },
+
+  // Utility functions
+  isValidAddress(address) {
+    try {
+      return ethers.isAddress(address);
+    } catch (error) {
+      return false;
+    }
+  },
+
+  isValidPrivateKey(privateKey) {
+    try {
+      new ethers.Wallet(privateKey);
+      return true;
+    } catch (error) {
+      return false;
     }
   }
-});
-},
-
-// Additional utility functions
-async getTokenBalances(address, providers) {
-const balances = {
-  eth: '0',
-  bsc: '0'
-};
-
-try {
-  // Get ETH balance
-  const ethBalance = await providers.eth.getBalance(address);
-  balances.eth = ethers.formatEther(ethBalance);
-
-  // Get BNB balance
-  const bscBalance = await providers.bsc.getBalance(address);
-  balances.bsc = ethers.formatEther(bscBalance);
-} catch (error) {
-  console.error('Error fetching balances:', error);
-}
-
-return balances;
-},
-
-// Function to validate Ethereum address
-isValidAddress(address) {
-try {
-  return ethers.isAddress(address);
-} catch (error) {
-  return false;
-}
-},
-
-// Function to validate private key
-isValidPrivateKey(privateKey) {
-try {
-  new ethers.Wallet(privateKey);
-  return true;
-} catch (error) {
-  return false;
-}
-}
 };

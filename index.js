@@ -38,7 +38,10 @@ bot.use(middlewares.logMiddleware);
 bot.command('start', commands.startCommand);
 bot.command('help', commands.helpCommand);
 bot.command('wallet', commands.walletCommand);
-bot.command('scanner', commands.scannerCommand);
+bot.command('buy&sell', commands.buysellCommand);
+bot.command('transfer', commands.transferCommand);
+bot.command('scanner', commands.scanner);
+bot.command('positions', commands.scanner);
 
 // Get balances for both wallets
 async function getWalletBalances(userId, chain) {
@@ -191,17 +194,12 @@ To ${tradeMode}, press one of the buttons below:`;
   }
 }
 
+// Updated createTradingButtons function with new sell options
 function createTradingButtons(chainName, tradeMode = 'buy') {
-  // Convert chainName to display name
   const displayChainName = chainName === 'BSC' ? 'BNB' : chainName;
 
   const buttons = [
       [Markup.button.callback('❌ Cancel', 'cancel')],
-      [
-          Markup.button.callback('Active Trades', 'active'),
-          Markup.button.callback('Swap', 'swa'),
-          Markup.button.callback('Audit', 'audit')
-      ]
   ];
   
   if (tradeMode === 'buy') {
@@ -212,8 +210,8 @@ function createTradingButtons(chainName, tradeMode = 'buy') {
       ]);
   } else {
       buttons.push([
-          Markup.button.callback('Sell Initial', `sell_initial`),
           Markup.button.callback('Sell 100%', `sell_all`),
+          Markup.button.callback('Sell 50%', `sell_50`),
           Markup.button.callback('Sell X%', `sell_custom`)
       ]);
   }
@@ -224,7 +222,53 @@ function createTradingButtons(chainName, tradeMode = 'buy') {
   ]);
   
   return buttons;
-} 
+}
+
+// Handle sell 50% action
+bot.action('sell_50', async (ctx) => {
+  try {
+      await ctx.answerCbQuery();
+      
+      if (!ctx.session?.lastScan?.result) {
+          return ctx.reply('❌ Please scan a token first.');
+      }
+
+      // Get available wallets
+      const response = await axios.get(`${BASE_URL}/wallet/evm/${ctx.from.id}`);
+      const wallets = response.data;
+      
+      if (!wallets || wallets.length === 0) {
+          return ctx.reply('❌ Please set up a wallet first using the /wallet command');
+      }
+
+      const scanResult = ctx.session.lastScan.result;
+      
+      ctx.session.pendingTrade = {
+          tokenAddress: ctx.session.lastScan.address,
+          mode: 'sell',
+          chain: scanResult.chain.toUpperCase(),
+          amount: '50%'
+      };
+
+      const walletButtons = wallets.map(wallet => ([
+          Markup.button.callback(
+              `👛 ${wallet.name}`, 
+              `select_wallet_sell_${wallet.name}`
+          )
+      ]));
+
+      const keyboard = Markup.inlineKeyboard([
+          ...walletButtons,
+          [Markup.button.callback('❌ Cancel', 'cancel')]
+      ]);
+
+      await ctx.reply('👛 Select wallet to sell from:', keyboard);
+
+  } catch (error) {
+      console.error('Error processing sell 50%:', error);
+      ctx.reply('❌ Error processing sell. Please try again.');
+  }
+});
 
 // Handle custom amount input
 async function handleCustomAmount(ctx, mode, token, chain) {
@@ -352,181 +396,215 @@ async function executeTrade(ctx, amount, action = 'buy') {
   }
 }
 
-// Handle wallet selection for trading
+// Update wallet selection handler for sells
 bot.action(/select_wallet_(\w+)_(\w+)/, async (ctx) => {
-    try {
-        await ctx.answerCbQuery();
-        const [, mode, walletName] = ctx.match;
-        
-        const userId = ctx.from.id;
-        const response = await axios.get(`${BASE_URL}/wallet/evm/${userId}`);
-        const wallets = response.data;
-        const selectedWallet = wallets.find(w => w.name === walletName);
+  try {
+      await ctx.answerCbQuery();
+      const [, mode, walletName] = ctx.match;
+      
+      const userId = ctx.from.id;
+      const response = await axios.get(`${BASE_URL}/wallet/evm/${userId}`);
+      const wallets = response.data;
+      const selectedWallet = wallets.find(w => w.name === walletName);
 
-        if (!selectedWallet) {
-            return ctx.reply('❌ Wallet not found. Please try again.');
-        }
+      if (!selectedWallet) {
+          return ctx.reply('❌ Wallet not found. Please try again.');
+      }
 
-        ctx.session.selectedWallet = selectedWallet;
+      ctx.session.selectedWallet = selectedWallet;
 
-        const promptText = mode === 'sell' 
-            ? `💱 Enter the amount of ${ctx.session.pendingTrade.tokenSymbol} to sell (or percentage, e.g., "50%"):`
-            : `💱 Enter the amount of ${ctx.session.pendingTrade.chain} to ${mode}:`;
+      // Check if this is a percentage-based sell
+      if (mode === 'sell' && ctx.session.pendingTrade?.amount?.endsWith('%')) {
+          // Execute trade directly with stored percentage
+          await executeTrade(ctx, ctx.session.pendingTrade.amount, mode);
+      } else {
+          // For custom amounts, prompt with forced reply
+          const message = await ctx.reply(
+              mode === 'sell'
+                  ? `💱 Enter the amount of ${ctx.session.pendingTrade.tokenSymbol} to sell (or percentage, e.g., "50%"):`
+                  : `💱 Enter the amount of ${ctx.session.pendingTrade.chain} to buy:`,
+              {
+                  reply_markup: {
+                      force_reply: true,
+                      selective: true
+                  }
+              }
+          );
 
-        await ctx.reply(
-            promptText,
-            {
-                reply_markup: {
-                    force_reply: true,
-                    selective: true
-                }
-            }
-        );
+          ctx.session.tradeState = {
+              waitingForAmount: true,
+              action: mode,
+              messageId: message.message_id
+          };
+      }
 
-        ctx.session.tradeState = {
-            waitingForAmount: true,
-            action: mode
-        };
-
-    } catch (error) {
-        console.error('Error in wallet selection:', error);
-        ctx.reply('❌ Error selecting wallet. Please try again.');
-    }
+  } catch (error) {
+      console.error('Error in wallet selection:', error);
+      ctx.reply('❌ Error selecting wallet. Please try again.');
+  }
 });
+
 
 // Handle text messages
 bot.on('text', async (ctx) => {
-    const userId = ctx.from.id;
-    const userState = commands.userStates.get(userId);
+  const userId = ctx.from.id;
+  const messageHasReply = ctx.message.reply_to_message;
+  const userState = commands.userStates.get(userId);
 
-    if (userState && userState.action === 'import') {
-        try {
-            const privateKey = ctx.message.text.trim();
-            try {
-                await ctx.deleteMessage();
-            } catch (error) {
-                console.log('Could not delete message:', error);
-            }
-            await commands.importWallet(ctx, privateKey, userState.walletNumber);
-            commands.userStates.delete(userId);
-        } catch (error) {
-            console.error('Error processing private key:', error);
-            await ctx.reply('❌ Invalid private key format. Please try again.');
-            commands.userStates.delete(userId);
-        }
-        return;
-    }
+  // Handle wallet import with forced reply
+  if (userState?.action === 'import' && messageHasReply) {
+      if (messageHasReply.message_id !== userState.requestMessageId) {
+          return; // Not a reply to our import request
+      }
 
-    if (ctx.session?.tradeState?.waitingForAmount) {
-        try {
-            let amount;
-            const input = ctx.message.text.trim();
-            const action = ctx.session.tradeState.action;
-            
-            if (ctx.session.pendingAmount) {
-                amount = ctx.session.pendingAmount;
-                delete ctx.pendingAmount;
-              } else {
-                  if (action === 'sell') {
-                      if (input.endsWith('%')) {
-                          const percentage = parseFloat(input);
-                          if (isNaN(percentage) || percentage <= 0 || percentage > 100) {
-                              return ctx.reply('❌ Please enter a valid percentage between 0 and 100');
-                          }
-                          amount = input;
-                      } else {
-                          amount = parseFloat(input);
-                          if (isNaN(amount) || amount <= 0) {
-                              return ctx.reply('❌ Please enter a valid token amount');
-                          }
-                          if (ctx.session.tokenBalance && amount > parseFloat(ctx.session.tokenBalance)) {
-                              return ctx.reply(`❌ Insufficient token balance. Available: ${ctx.session.tokenBalance}`);
-                          }
+      try {
+          const privateKey = ctx.message.text.trim();
+          
+          // Delete the private key message
+          try {
+              await ctx.deleteMessage();
+          } catch (error) {
+              console.log('Could not delete message:', error);
+          }
+          
+          await commands.importWallet(ctx, privateKey, userState.walletNumber);
+          commands.userStates.delete(userId);
+
+          // Delete the original request message
+          try {
+              await ctx.telegram.deleteMessage(ctx.chat.id, userState.requestMessageId);
+          } catch (error) {
+              console.log('Could not delete request message:', error);
+          }
+      } catch (error) {
+          console.error('Error processing private key:', error);
+          await ctx.reply('❌ Invalid private key format. Please try again.');
+          commands.userStates.delete(userId);
+      }
+      return;
+  }
+
+  // Handle trading amounts with forced reply
+  if (ctx.session?.tradeState?.waitingForAmount && messageHasReply) {
+      // Verify this is a reply to our amount request
+      if (messageHasReply.message_id !== ctx.session.tradeState.messageId) {
+          return; // Not a reply to our amount request
+      }
+
+      try {
+          let amount;
+          const input = ctx.message.text.trim();
+          const action = ctx.session.tradeState.action;
+          
+          // Handle pending amount from predefined buttons
+          if (ctx.session.pendingAmount) {
+              amount = ctx.session.pendingAmount;
+              delete ctx.session.pendingAmount;
+          } else {
+              if (action === 'sell') {
+                  if (input.endsWith('%')) {
+                      const percentage = parseFloat(input);
+                      if (isNaN(percentage) || percentage <= 0 || percentage > 100) {
+                          return ctx.reply('❌ Please enter a valid percentage between 0 and 100');
                       }
+                      amount = input;
                   } else {
                       amount = parseFloat(input);
                       if (isNaN(amount) || amount <= 0) {
-                          return ctx.reply('❌ Please enter a valid ETH amount');
+                          return ctx.reply('❌ Please enter a valid token amount');
+                      }
+                      if (ctx.session.tokenBalance && amount > parseFloat(ctx.session.tokenBalance)) {
+                          return ctx.reply(`❌ Insufficient token balance. Available: ${ctx.session.tokenBalance}`);
                       }
                   }
+              } else {
+                  amount = parseFloat(input);
+                  if (isNaN(amount) || amount <= 0) {
+                      return ctx.reply('❌ Please enter a valid coin amount');
+                  }
               }
-  
-              await executeTrade(ctx, amount, ctx.session.tradeState.action);
-              delete ctx.session.tradeState;
-              delete ctx.session.tokenBalance;
-  
-          } catch (error) {
-              console.error('Error processing amount:', error);
-              await ctx.reply('❌ Error processing amount. Please try again.');
           }
-          return;
+
+          // Execute the trade
+          await executeTrade(ctx, amount, ctx.session.tradeState.action);
+          
+          // Clean up session
+          delete ctx.session.tradeState;
+          delete ctx.session.tokenBalance;
+
+      } catch (error) {
+          console.error('Error processing amount:', error);
+          await ctx.reply('❌ Error processing amount. Please try again.');
       }
+      return;
+  }
+
+  // Handle token address scanning
+  const addressRegex = /(0x[a-fA-F0-9]{40})/;
+  const match = ctx.message.text.match(addressRegex);
   
-      const addressRegex = /(0x[a-fA-F0-9]{40})/;
-      const match = ctx.message.text.match(addressRegex);
-      
-      if (match) {
-        const address = match[0];
-        let scanningMsg;
-    
-        try {
-            scanningMsg = await ctx.reply('🔍 Scanning token...');
-            
-            // First try ETH
-            let ethResult = await scanToken(address, 'eth');
-            
-            // If not found on ETH, try BSC
-            let bscResult;
-            if (!ethResult.success) {
-                bscResult = await scanToken(address, 'bsc');
-            }
-    
-            if (!ethResult.success && !bscResult?.success) {
-                await ctx.telegram.deleteMessage(ctx.chat.id, scanningMsg.message_id);
-                return ctx.reply('⚠️ Token not found on ETH and BSC');
-            }
-    
-            // Use whichever result was successful
-            const scanResult = ethResult.success ? ethResult : bscResult;
-            const chainName = scanResult.chain.toUpperCase();
-    
-            const briefMessage = await formatBriefResponse(
-                scanResult.data,
-                address,
-                chainName,
-                userId,
-                'buy'
-            );
-    
-            const buttons = createTradingButtons(chainName, 'buy');
-            const inlineKeyboard = Markup.inlineKeyboard(buttons);
-    
-            await ctx.telegram.deleteMessage(ctx.chat.id, scanningMsg.message_id);
-            
-            ctx.session = {
-                lastScan: {
-                    result: scanResult,
-                    address: address,
-                    data: scanResult.data  // Store full data for reference
-                },
-                tradeMode: 'buy'
-            };
-    
-            await ctx.reply(briefMessage, { 
-                parse_mode: 'Markdown',
-                ...inlineKeyboard
-            });
-    
-        } catch (error) {
-            console.error('Critical error in scanning process:', error);
-            if (scanningMsg) {
-                await ctx.telegram.deleteMessage(ctx.chat.id, scanningMsg.message_id)
-                    .catch(err => console.error('Error deleting scanning message:', err));
-            }
-            ctx.reply('❌ Error scanning token. Please try again later.');
-        }
-    }
-  });
+  if (match) {
+      const address = match[0];
+      let scanningMsg;
+  
+      try {
+          scanningMsg = await ctx.reply('🔍 Scanning token...');
+          
+          // First try ETH
+          let ethResult = await scanToken(address, 'eth');
+          
+          // If not found on ETH, try BSC
+          let bscResult;
+          if (!ethResult.success) {
+              bscResult = await scanToken(address, 'bsc');
+          }
+  
+          if (!ethResult.success && !bscResult?.success) {
+              await ctx.telegram.deleteMessage(ctx.chat.id, scanningMsg.message_id);
+              return ctx.reply('⚠️ Token not found on ETH and BSC');
+          }
+  
+          // Use whichever result was successful
+          const scanResult = ethResult.success ? ethResult : bscResult;
+          const chainName = scanResult.chain.toUpperCase();
+  
+          const briefMessage = await formatBriefResponse(
+              scanResult.data,
+              address,
+              chainName,
+              userId,
+              'buy'
+          );
+  
+          const buttons = createTradingButtons(chainName, 'buy');
+          const inlineKeyboard = Markup.inlineKeyboard(buttons);
+  
+          await ctx.telegram.deleteMessage(ctx.chat.id, scanningMsg.message_id);
+          
+          ctx.session = {
+              lastScan: {
+                  result: scanResult,
+                  address: address,
+                  data: scanResult.data
+              },
+              tradeMode: 'buy'
+          };
+  
+          await ctx.reply(briefMessage, {
+              parse_mode: 'Markdown',
+              ...inlineKeyboard
+          });
+  
+      } catch (error) {
+          console.error('Critical error in scanning process:', error);
+          if (scanningMsg) {
+              await ctx.telegram.deleteMessage(ctx.chat.id, scanningMsg.message_id)
+                  .catch(err => console.error('Error deleting scanning message:', err));
+          }
+          ctx.reply('❌ Error scanning token. Please try again later.');
+      }
+  }
+});
   
   // Handle mode toggle
   bot.action('toggle_mode', async (ctx) => {
@@ -675,11 +753,11 @@ bot.on('text', async (ctx) => {
   });
   
   // Handle predefined buy amounts
-  ['buy_1', 'buy_5'].forEach(amount => {
+  ['buy_0.5', 'buy_1'].forEach(amount => {
       bot.action(amount, async (ctx) => {
           try {
               await ctx.answerCbQuery();
-              const amountValue = amount === 'buy_1' ? 1.0 : 5.0;
+              const amountValue = amount === 'buy_1' ? 0.5 : 0.1;
               
               if (!ctx.session?.lastScan?.result) {
                   return ctx.reply('❌ Please scan a token first.');
@@ -729,30 +807,51 @@ bot.on('text', async (ctx) => {
       });
   });
   
-  // Handle sell all action
-  bot.action('sell_all', async (ctx) => {
-      try {
-          await ctx.answerCbQuery();
-          
-          if (!ctx.session?.lastScan?.result) {
-              return ctx.reply('❌ Please scan a token first.');
-          }
-  
-          ctx.session.pendingAmount = '100%';
-          const scanResult = ctx.session.lastScan.result;
-          
-          await handleCustomAmount(
-              ctx,
-              'sell',
-              ctx.session.lastScan.address,
-              scanResult.chain.toUpperCase()
-          );
-  
-      } catch (error) {
-          console.error('Error processing sell all:', error);
-          ctx.reply('❌ Error processing sell. Please try again.');
+// Handle sell all (100%) action
+bot.action('sell_all', async (ctx) => {
+  try {
+      await ctx.answerCbQuery();
+      
+      if (!ctx.session?.lastScan?.result) {
+          return ctx.reply('❌ Please scan a token first.');
       }
-  });
+
+      // Get available wallets
+      const response = await axios.get(`${BASE_URL}/wallet/evm/${ctx.from.id}`);
+      const wallets = response.data;
+      
+      if (!wallets || wallets.length === 0) {
+          return ctx.reply('❌ Please set up a wallet first using the /wallet command');
+      }
+
+      const scanResult = ctx.session.lastScan.result;
+      
+      ctx.session.pendingTrade = {
+          tokenAddress: ctx.session.lastScan.address,
+          mode: 'sell',
+          chain: scanResult.chain.toUpperCase(),
+          amount: '100%'
+      };
+
+      const walletButtons = wallets.map(wallet => ([
+          Markup.button.callback(
+              `👛 ${wallet.name}`, 
+              `select_wallet_sell_${wallet.name}`
+          )
+      ]));
+
+      const keyboard = Markup.inlineKeyboard([
+          ...walletButtons,
+          [Markup.button.callback('❌ Cancel', 'cancel')]
+      ]);
+
+      await ctx.reply('👛 Select wallet to sell from:', keyboard);
+
+  } catch (error) {
+      console.error('Error processing sell all:', error);
+      ctx.reply('❌ Error processing sell. Please try again.');
+  }
+});
 
   // Add the audit action handler
 bot.action('audit', async (ctx) => {
