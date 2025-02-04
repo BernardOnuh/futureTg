@@ -628,7 +628,7 @@ bot.action(/select_transfer_(eth|bnb)_wallet(\d)/, async (ctx) => {
       // Scanner action
       bot.action('buy&sell', async (ctx) => {
         await ctx.answerCbQuery();
-        await this.buy&sellCommand(ctx);
+        await this.buysellCommand(ctx);
       });
   
       // Wallet action
@@ -662,9 +662,9 @@ bot.action(/select_transfer_(eth|bnb)_wallet(\d)/, async (ctx) => {
       });
   
       // Snipe action
-      bot.action('snipe', async (ctx) => {
+      bot.action('scanner', async (ctx) => {
         await ctx.answerCbQuery();
-        await ctx.reply('Snipe feature coming soon!');
+        await this.scanner(ctx);
       });
   
       // Home action
