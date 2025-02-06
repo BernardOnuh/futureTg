@@ -64,55 +64,89 @@ class TradeExecutor {
         }
     }
 
-    async executeBuy(tokenAddress, amountNative) {
+    calculateMinimumAmountOut(amountOut, slippagePercent = 0) {
+        console.log('\n=== Calculating Minimum Amount Out ===');
+        console.log('Amount Out:', amountOut.toString());
+        console.log('Slippage Percent:', slippagePercent);
+
+        try {
+            const amount = BigInt(amountOut);
+            
+            if (amount === BigInt(0) || slippagePercent === 0) {
+                return amount;
+            }
+
+            const basisPoints = BigInt(10000 - (slippagePercent * 100));
+            const minimumAmount = (amount * basisPoints) / BigInt(10000);
+            
+            console.log('Basis Points:', basisPoints.toString());
+            console.log('Calculated Minimum Amount:', minimumAmount.toString());
+            
+            return minimumAmount;
+        } catch (error) {
+            console.error('Error calculating minimum amount:', error);
+            throw new Error(`Failed to calculate minimum amount: ${error.message}`);
+        }
+    }
+
+    async executeBuy(tokenAddress, amountNative, slippagePercent = 0, gasLimit = 500000) {
         console.log('\n=== Starting Buy Execution ===');
         console.log('Token Address:', tokenAddress);
         console.log('Amount Native:', amountNative);
+        console.log('Slippage Percentage:', slippagePercent, '%');
 
         try {
-            // Convert amount to BigInt safely
             const amountIn = ethers.parseEther(amountNative.toString());
             
-            // Get token details
             const token = new ethers.Contract(tokenAddress, ERC20_ABI, this.wallet);
             const [symbol, decimals] = await Promise.all([
                 token.symbol().catch(() => 'UNKNOWN'),
                 token.decimals().catch(() => 18)
             ]);
 
-            // Check wallet balance
             const balance = await this.provider.getBalance(this.wallet.address);
             if (balance < amountIn) {
                 throw new Error(`Insufficient ETH balance. Have: ${ethers.formatEther(balance)} ETH, Need: ${ethers.formatEther(amountIn)} ETH`);
             }
 
-            // Get pool info and quote
             const poolInfo = await this.detectPool(tokenAddress, amountNative);
-            const deadline = Math.floor(Date.now() / 1000) + 300; // 5 minutes
+            const deadline = Math.floor(Date.now() / 1000) + 300;
 
-            // Get gas data
             const { gasPrice } = await this.provider.getFeeData();
 
-            let tx;
+            let result;
             if (poolInfo.version === 2) {
-                tx = await this.executeV2Buy(
+                result = await this.executeV2Buy(
                     tokenAddress,
                     amountIn,
                     poolInfo.amountOut,
                     deadline,
-                    gasPrice
+                    gasPrice,
+                    slippagePercent,
+                    gasLimit
                 );
             } else {
-                tx = await this.executeV3Buy(
+                result = await this.executeV3Buy(
                     tokenAddress,
                     amountIn,
                     poolInfo,
                     deadline,
-                    gasPrice
+                    gasPrice,
+                    slippagePercent,
+                    gasLimit
                 );
             }
 
-            return tx;
+            // Verify the transaction was successful
+            if (!result.receipt || !result.receipt.status) {
+                throw new Error('Transaction failed on chain');
+            }
+
+            return {
+                ...result,
+                tokenAmount: ethers.formatUnits(poolInfo.amountOut, decimals),
+                symbol
+            };
 
         } catch (error) {
             console.error('\n=== Buy Execution Error ===');
@@ -122,90 +156,228 @@ class TradeExecutor {
         }
     }
 
-    async executeSell(tokenAddress, amountTokens) {
+    async executeSell(tokenAddress, amountTokens, slippagePercent = 0, gasLimit = 500000) {
         console.log('\n=== Starting Sell Execution ===');
         console.log('Token Address:', tokenAddress);
         console.log('Amount Tokens:', amountTokens);
-    
+        console.log('Slippage Percentage:', slippagePercent, '%');
+
         try {
             const token = new ethers.Contract(tokenAddress, ERC20_ABI, this.wallet);
             const [symbol, decimals] = await Promise.all([
                 token.symbol().catch(() => 'UNKNOWN'),
                 token.decimals().catch(() => 18)
             ]);
-    
-            // Get current balance first
+
             const balance = await token.balanceOf(this.wallet.address);
             const formattedBalance = ethers.formatUnits(balance, decimals);
-            console.log('Current balance:', formattedBalance, symbol);
-    
-            // If amount is a percentage, calculate the actual amount
+
             let sellAmount;
             if (typeof amountTokens === 'string' && amountTokens.endsWith('%')) {
                 const percentage = parseFloat(amountTokens) / 100;
                 sellAmount = (parseFloat(formattedBalance) * percentage).toString();
-                console.log(`Selling ${amountTokens} = ${sellAmount} ${symbol}`);
             } else {
-                // Check if amountTokens is already in wei format (big number)
                 if (ethers.isHexString(amountTokens) || /^\d+$/.test(amountTokens)) {
                     sellAmount = ethers.formatUnits(amountTokens, decimals);
-                    console.log(`Converting wei amount to decimal: ${sellAmount} ${symbol}`);
                 } else {
                     sellAmount = amountTokens.toString();
                 }
             }
-    
-            // Convert to token decimals
+
             const amountIn = ethers.parseUnits(sellAmount, decimals);
-            console.log('Amount in wei:', amountIn.toString());
-    
-            // Verify balance is sufficient
+
             if (balance < amountIn) {
                 throw new Error(`Insufficient token balance. Have: ${formattedBalance} ${symbol}, Need: ${sellAmount} ${symbol}`);
             }
-    
-            // Check and set allowance if needed
+
             const allowance = await token.allowance(this.wallet.address, this.edgeRouter.target);
             if (allowance < amountIn) {
                 console.log('Setting token approval...');
                 const approveTx = await token.approve(this.edgeRouter.target, ethers.MaxUint256);
-                await approveTx.wait();
+                const approveReceipt = await approveTx.wait();
+                
+                if (!approveReceipt.status) {
+                    throw new Error('Token approval failed');
+                }
                 console.log('Token approval set');
             }
-    
-            // Get pool info and quote
+
             const poolInfo = await this.detectPool(tokenAddress, sellAmount);
             const deadline = Math.floor(Date.now() / 1000) + 300;
-    
-            // Get gas data
+
             const { gasPrice } = await this.provider.getFeeData();
-    
-            let tx;
+
+            let result;
             if (poolInfo.version === 2) {
-                tx = await this.executeV2Sell(
+                result = await this.executeV2Sell(
                     tokenAddress,
                     amountIn,
                     poolInfo.amountOut,
                     deadline,
-                    gasPrice
+                    gasPrice,
+                    slippagePercent,
+                    gasLimit
                 );
             } else {
-                tx = await this.executeV3Sell(
+                result = await this.executeV3Sell(
                     tokenAddress,
                     amountIn,
                     poolInfo,
                     deadline,
-                    gasPrice
+                    gasPrice,
+                    slippagePercent,
+                    gasLimit
                 );
             }
-    
-            return tx;
-    
+
+            // Verify the transaction was successful
+            if (!result.receipt || !result.receipt.status) {
+                throw new Error('Transaction failed on chain');
+            }
+
+            return {
+                ...result,
+                ethAmount: ethers.formatEther(poolInfo.amountOut),
+                symbol
+            };
+
         } catch (error) {
             console.error('\n=== Sell Execution Error ===');
             console.error('Error type:', error.constructor.name);
             console.error('Error message:', error.message);
             throw error;
+        }
+    }
+
+    async executeV2Buy(tokenAddress, amountIn, amountOut, deadline, gasPrice, slippagePercent, gasLimit) {
+        console.log('\n=== Executing V2 Buy ===');
+        console.log('Token Address:', tokenAddress);
+        console.log('Amount In:', amountIn.toString());
+        console.log('Expected Out:', amountOut?.toString() || '0');
+        console.log('Slippage:', slippagePercent, '%');
+
+        try {
+            if (!amountIn || amountIn === BigInt(0)) {
+                throw new Error('Invalid input amount');
+            }
+
+            if (!amountOut || amountOut === BigInt(0)) {
+                throw new Error('Invalid output amount expected');
+            }
+
+            const path = [this.network.addresses.V2.WETH, tokenAddress];
+            const amountOutMin = this.calculateMinimumAmountOut(amountOut, slippagePercent);
+
+            if (amountOutMin === BigInt(0) && slippagePercent < 100) {
+                throw new Error('Invalid minimum amount calculation');
+            }
+
+            const options = {
+                value: amountIn,
+                gasLimit: BigInt(gasLimit)
+            };
+
+            if (gasPrice) {
+                options.gasPrice = gasPrice;
+            }
+
+            console.log('Submitting transaction...');
+            const tx = await this.edgeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens(
+                this.network.addresses.V2.ROUTER,
+                amountOutMin,
+                path,
+                this.wallet.address,
+                deadline,
+                options
+            );
+
+            console.log('Waiting for transaction confirmation...');
+            const receipt = await tx.wait();
+
+            if (!receipt || !receipt.status) {
+                throw new Error('Transaction failed on chain');
+            }
+
+            console.log('Transaction confirmed successfully');
+            return {
+                hash: tx.hash,
+                receipt: receipt,
+                expectedOut: amountOut.toString(),
+                minimumOut: amountOutMin.toString()
+            };
+
+        } catch (error) {
+            console.error('V2 Buy Execution Error:', error);
+            if (error.receipt) {
+                throw new Error(`Transaction failed on-chain: Insufficient Gas`);
+            }
+            throw new Error(`Buy execution failed: ${error.message}`);
+        }
+    }
+
+    async executeV2Sell(tokenAddress, amountIn, amountOut, deadline, gasPrice, slippagePercent, gasLimit) {
+        console.log('\n=== Executing V2 Sell ===');
+        console.log('Token Address:', tokenAddress);
+        console.log('Amount In:', amountIn.toString());
+        console.log('Expected Out:', amountOut?.toString() || '0');
+        console.log('Slippage:', slippagePercent, '%');
+
+        try {
+            if (!amountIn || amountIn === BigInt(0)) {
+                throw new Error('Invalid sell amount');
+            }
+
+            if (!amountOut || amountOut === BigInt(0)) {
+                throw new Error('Invalid output amount expected');
+            }
+
+            const path = [tokenAddress, this.network.addresses.V2.WETH];
+            const amountOutMin = this.calculateMinimumAmountOut(amountOut, slippagePercent);
+
+            if (amountOutMin === BigInt(0) && slippagePercent < 100) {
+                throw new Error('Invalid minimum amount calculation');
+            }
+
+            const options = {
+                gasLimit: BigInt(gasLimit)
+            };
+
+            if (gasPrice) {
+                options.gasPrice = gasPrice;
+            }
+
+            console.log('Submitting transaction...');
+            const tx = await this.edgeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
+                this.network.addresses.V2.ROUTER,
+                amountIn,
+                amountOutMin,
+                path,
+                this.wallet.address,
+                deadline,
+                options
+            );
+
+            console.log('Waiting for transaction confirmation...');
+            const receipt = await tx.wait();
+
+            if (!receipt || !receipt.status) {
+                throw new Error('Transaction failed on chain');
+            }
+
+            console.log('Transaction confirmed successfully');
+            return {
+                hash: tx.hash,
+                receipt: receipt,
+                expectedOut: amountOut.toString(),
+                minimumOut: amountOutMin.toString()
+            };
+
+        } catch (error) {
+            console.error('V2 Sell Execution Error:', error);
+            if (error.receipt) {
+                throw new Error(`Transaction failed on-chain: ${error.receipt.transactionHash}`);
+            }
+            throw new Error(`Sell execution failed: ${error.message}`);
         }
     }
 
@@ -289,208 +461,6 @@ class TradeExecutor {
         }
         
         throw new Error("No viable V3 fee tier found");
-    }
-
-    async executeV2Buy(tokenAddress, amountIn, amountOut, deadline, gasPrice) {
-        console.log('\n=== Executing V2 Buy ===');
-        console.log('Token Address:', tokenAddress);
-        console.log('Amount In:', amountIn.toString());
-        console.log('Expected Out:', amountOut?.toString() || '0');
-        
-        try {
-            if (!amountIn || amountIn === BigInt(0)) {
-                throw new Error('Invalid input amount');
-            }
-
-            const path = [this.network.addresses.V2.WETH, tokenAddress];
-            const amountOutMin = BigInt(0); // No slippage for now
-
-            // Create transaction options
-            const options = {
-                value: amountIn,
-                gasLimit: BigInt(500000)
-            };
-
-            if (gasPrice) {
-                options.gasPrice = gasPrice;
-            }
-
-            const tx = await this.edgeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens(
-                this.network.addresses.V2.ROUTER,
-                amountOutMin,
-                path,
-                this.wallet.address,
-                deadline,
-                options
-            );
-
-            console.log('Transaction Hash:', tx.hash);
-            
-            // Ensure we always return an object with at least a hash
-            return {
-                hash: tx.hash,
-                wait: async () => {
-                    try {
-                        return await tx.wait();
-                    } catch (waitError) {
-                        console.error('Error waiting for transaction:', waitError);
-                        return { hash: tx.hash };
-                    }
-                }
-            };
-
-        } catch (error) {
-            console.error('V2 Buy Execution Error:', error);
-            throw new Error(`Buy execution failed: ${error.message}`);
-        }
-    }
-
-    async executeV2Sell(tokenAddress, amountIn, amountOut, deadline, gasPrice) {
-        console.log('\n=== Executing V2 Sell ===');
-        console.log('Token Address:', tokenAddress);
-        console.log('Amount In:', amountIn.toString());
-
-        try {
-            if (!amountIn || amountIn === BigInt(0)) {
-                throw new Error('Invalid sell amount');
-            }
-
-            const path = [tokenAddress, this.network.addresses.V2.WETH];
-            const amountOutMin = BigInt(0); // No slippage for tax tokens
-
-            // Create transaction options
-            const options = {
-                gasLimit: BigInt(500000)
-            };
-
-            if (gasPrice) {
-                options.gasPrice = gasPrice;
-            }
-
-            const tx = await this.edgeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
-                this.network.addresses.V2.ROUTER,
-                amountIn,
-                amountOutMin,
-                path,
-                this.wallet.address,
-                deadline,
-                options
-            );
-
-            console.log('Transaction Hash:', tx.hash);
-            
-            // Ensure we always return an object with at least a hash
-            return {
-                hash: tx.hash,
-                wait: async () => {
-                    try {
-                        return await tx.wait();
-                    } catch (waitError) {
-                        console.error('Error waiting for transaction:', waitError);
-                        return { hash: tx.hash };
-                    }
-                }
-            };
-
-        } catch (error) {
-            console.error('V2 Sell Execution Error:', error);
-            throw new Error(`Sell execution failed: ${error.message}`);
-        }
-    }
-
-    async executeV3Buy(tokenAddress, amountIn, poolInfo, deadline, gasPrice) {
-        console.log('\n=== Executing V3 Buy ===');
-        console.log('Token Address:', tokenAddress);
-        console.log('Amount In:', amountIn.toString());
-        console.log('Fee Tier:', poolInfo.feeTier);
-        
-        const amountOutMin = BigInt(0); // No slippage for now
-
-        const params = {
-            tokenIn: this.network.addresses.V3.WETH,
-            tokenOut: tokenAddress,
-            fee: poolInfo.feeTier,
-            recipient: this.wallet.address,
-            deadline: deadline,
-            amountIn: amountIn,
-            amountOutMinimum: amountOutMin,
-            sqrtPriceLimitX96: 0
-        };
-
-        const options = {
-            value: amountIn,
-            gasLimit: BigInt(500000)
-        };
-
-        if (gasPrice) {
-            options.gasPrice = gasPrice;
-        }
-
-        const tx = await this.edgeRouter.exactInputSingle(
-            this.network.addresses.V3.ROUTER,
-            params,
-            options
-        );
-
-        console.log('Transaction Hash:', tx.hash);
-        
-        // Ensure we always return an object with at least a hash
-        return {
-            hash: tx.hash,
-            wait: async () => {
-                try {
-                    return await tx.wait();
-                } catch (waitError) {
-                    console.error('Error waiting for transaction:', waitError);
-                    return { hash: tx.hash };
-                }
-            }
-        };
-    }
-
-    async executeV3Sell(tokenAddress, amountIn, poolInfo, deadline, gasPrice) {
-        console.log('\n=== Executing V3 Sell ===');
-        const amountOutMin = BigInt(0);
-
-        const params = {
-            tokenIn: tokenAddress,
-            tokenOut: this.network.addresses.V3.WETH,
-            fee: poolInfo.feeTier,
-            recipient: this.wallet.address,
-            deadline: deadline,
-            amountIn: amountIn,
-            amountOutMinimum: amountOutMin,
-            sqrtPriceLimitX96: 0
-        };
-
-        const options = {
-            gasLimit: BigInt(500000)
-        };
-
-        if (gasPrice) {
-            options.gasPrice = gasPrice;
-        }
-
-        const tx = await this.edgeRouter.exactInputSingle(
-            this.network.addresses.V3.ROUTER,
-            params,
-            options
-        );
-
-        console.log('Transaction Hash:', tx.hash);
-        
-        // Ensure we always return an object with at least a hash
-        return {
-            hash: tx.hash,
-            wait: async () => {
-                try {
-                    return await tx.wait();
-                } catch (waitError) {
-                    console.error('Error waiting for transaction:', waitError);
-                    return { hash: tx.hash };
-                }
-            }
-        };
     }
 
     async getTokenBalance(tokenAddress) {
@@ -637,7 +607,8 @@ class TradeExecutor {
                     version: 3,
                     amountIn: amountIn,
                     amountOut: v3Price.amountOut,
-                    price: ethers.formatEther(v3Price.amountOut)
+                    price: ethers.formatEther(v3Price.amountOut),
+                    feeTier: v3Price.feeTier
                 };
             } catch (v3Error) {
                 console.log('V3 price check failed, trying V2...');
@@ -657,6 +628,83 @@ class TradeExecutor {
             console.error('Error getting token price:', error);
             throw error;
         }
+    }
+
+    async getPoolInfo(tokenAddress) {
+        try {
+            console.log('\n=== Getting Pool Info ===');
+            const poolData = await this.detectPool(tokenAddress, '0.1');
+            
+            return {
+                version: poolData.version,
+                feeTier: poolData.feeTier,
+                liquidityUSD: await this.getLiquidityUSD(tokenAddress),
+                priceImpact: await this.calculatePriceImpact(tokenAddress)
+            };
+        } catch (error) {
+            console.error('Error getting pool info:', error);
+            throw error;
+        }
+    }
+
+    async calculatePriceImpact(tokenAddress) {
+        try {
+            console.log('\n=== Calculating Price Impact ===');
+            
+            // Get price for 0.1 ETH
+            const smallTrade = await this.getTokenPrice(tokenAddress, '0.1');
+            
+            // Get price for 1 ETH
+            const largeTrade = await this.getTokenPrice(tokenAddress, '1');
+            
+            // Calculate price impact
+            const smallPrice = parseFloat(smallTrade.price);
+            const largePrice = parseFloat(largeTrade.price);
+            const priceImpact = ((smallPrice - largePrice) / smallPrice) * 100;
+            
+            return Math.abs(priceImpact);
+        } catch (error) {
+            console.error('Error calculating price impact:', error);
+            return Infinity;
+        }
+    }
+
+    async getLiquidityUSD(tokenAddress) {
+        try {
+            console.log('\n=== Getting Liquidity in USD ===');
+            
+            // Get token price in ETH
+            const priceData = await this.getTokenPrice(tokenAddress);
+            
+            // Get token balance of the pool
+            const poolAddress = await this.getPoolAddress(tokenAddress);
+            const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, this.provider);
+            const poolBalance = await tokenContract.balanceOf(poolAddress);
+            
+            // Calculate liquidity
+            const tokenDecimals = await tokenContract.decimals();
+            const formattedBalance = parseFloat(ethers.formatUnits(poolBalance, tokenDecimals));
+            const priceInETH = parseFloat(priceData.price);
+            
+            // Get ETH price in USD (you would need to implement this)
+            const ethPriceUSD = await this.getETHPrice();
+            
+            return formattedBalance * priceInETH * ethPriceUSD;
+        } catch (error) {
+            console.error('Error getting liquidity:', error);
+            return 0;
+        }
+    }
+
+    async getETHPrice() {
+        // Implement ETH price fetching logic here
+        // You could use an oracle or API
+        return 3000; // Placeholder
+    }
+
+    async getPoolAddress(tokenAddress) {
+        // This is a simplified version - you would need to implement proper pool address retrieval
+        return tokenAddress;
     }
 }
 

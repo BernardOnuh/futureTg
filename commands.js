@@ -6,6 +6,7 @@ const axios = require('axios');
 
 const BASE_URL = 'https://fets-database.onrender.com/api/future-edge';
 const userStates = new Map();
+const settingsHandler = require('./settings');
 const importRequestMessages = new Map();
 
 
@@ -22,7 +23,7 @@ module.exports = {
           Markup.button.callback(`👝Wallet`, 'wallet'),
         ],
         [
-          Markup.button.callback(`📊Position`, 'positions'),
+          Markup.button.callback(`📊Position`, 'show_positions_message'),
           Markup.button.callback(`⚙️Settings`, 'settings'),
         ],
         [
@@ -40,14 +41,18 @@ module.exports = {
       ctx.replyWithMarkdown(
         `👋*Welcome* ${firstName} to Future Edge Trading Bot! \n\n` +
         `The *Fastest*⚡ and most *Reliable*🛡️ \n` +
-        `🥏 Token Scanner \n` +
+
+        `🥏 Token Scanner \n\n` +
+        
         `🥏 Trade Bot \n\n` +
 
         `Paste📝 any Token Contract Address on *Eth || Bsc* on this bot to Scan & Trade \n\n` +
 
-        `*Eth || Bsc* \n` +
-        `Wallet:*Not Connected*\n \n` +
-        `Price $${ethPrice}(ETH/USDT) \n` +
+        `*Eth || Bsc* \n\n` +
+        `Wallet:*Connected*\n\n` +
+
+        `Price $${ethPrice}(ETH/USDT) \n\n` +
+
         `Price $${bscPrice}(BNB/USDT) \n\n`,
         Homekeyboard
       );
@@ -452,6 +457,11 @@ module.exports = {
       }
     });
 
+   bot.action('show_positions_message', async (ctx) => {
+      await ctx.answerCbQuery();
+      await ctx.reply('use command /positions to view your positions');
+    });
+
 // Handle transfer actions
 bot.action(['transfer_eth', 'transfer_bnb'], async (ctx) => {
   try {
@@ -589,11 +599,24 @@ bot.action(/select_transfer_(eth|bnb)_wallet(\d)/, async (ctx) => {
       await this.startCommand(ctx);
     });
 
+    bot.action('positions', async (ctx) => {
+      await ctx.answerCbQuery();
+      await positionHandler.positions(ctx);
+    });
+  
+    bot.action('settings', async (ctx) => {
+      await ctx.answerCbQuery();
+      await settingsHandler.settings(ctx);
+    });
+  
+
     // General wallet menu action
     bot.action('wallet', async (ctx) => {
       await ctx.answerCbQuery();
       await this.walletCommand(ctx);
     });
+
+
 
     // Handle text messages
     bot.on('text', async (ctx) => {
@@ -643,23 +666,12 @@ bot.action(/select_transfer_(eth|bnb)_wallet(\d)/, async (ctx) => {
         await this.transferCommand(ctx);
       });
   
-      // Active trades action
-      bot.action('active', async (ctx) => {
+      bot.action('positions', async (ctx) => {
         await ctx.answerCbQuery();
-        await ctx.reply('Active trades feature coming soon!');
+        await ctx.reply('use command /positions to view your positions');
       });
   
-      // Settings action
-      bot.action('settings', async (ctx) => {
-        await ctx.answerCbQuery();
-        await ctx.reply('Settings feature coming soon!');
-      });
   
-      // Bridge action
-      bot.action('bridge', async (ctx) => {
-        await ctx.answerCbQuery();
-        await ctx.reply('Bridge feature coming soon!');
-      });
   
       // Snipe action
       bot.action('scanner', async (ctx) => {
@@ -673,6 +685,8 @@ bot.action(/select_transfer_(eth|bnb)_wallet(\d)/, async (ctx) => {
         await this.startCommand(ctx);
       });
   },
+
+  
 
   // Helper functions for handling replies
   async handleImportReply(ctx, userState) {

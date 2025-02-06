@@ -1,250 +1,315 @@
+// tokenScanner.js
 const axios = require('axios');
-const config = require('../config');
 
-// Helper functions
-function getDexScreenerUrl(chain, address) {
-    const chainPath = chain === 'eth' ? 'ethereum' : 'bsc';
-    return `https://dexscreener.com/${chainPath}/${address}`;
-}
-
-function formatNumberWithCommas(num) {
-    if (!num || isNaN(num)) return '0';
-    
-    try {
-        if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
-        if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
-        if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
-        return num.toFixed(2);
-    } catch (error) {
-        console.error('Error formatting number:', error);
-        return '0';
-    }
-}
-
+// Helper Functions
 function formatPrice(price) {
-    if (!price || isNaN(price)) return '0.00';
+  // Convert to number if it's a string
+  const numPrice = typeof price === 'string' ? parseFloat(price) : price;
+
+  // Handle invalid cases
+  if (typeof numPrice !== 'number' || isNaN(numPrice)) {
+    return '0.00';
+  }
+
+  try {
+    if (numPrice < 0.000001) {
+      return numPrice.toExponential(4);
+    }
+    if (numPrice < 0.001) {
+      return numPrice.toFixed(8);
+    }
+    if (numPrice < 1) {
+      return numPrice.toFixed(6);
+    }
+    if (numPrice < 10) {
+      return numPrice.toFixed(4);
+    }
+    if (numPrice < 1000) {
+      return numPrice.toFixed(2);
+    }
+    return formatNumberWithCommas(numPrice);
+  } catch (error) {
+    console.error('Error formatting price:', error);
+    return '0.00';
+  }
+}
+
+// Format number with commas and handle edge cases
+function formatNumberWithCommas(number) {
+  try {
+    // Convert to number if it's a string
+    const num = typeof number === 'string' ? parseFloat(number) : number;
     
-    try {
-        if (price < 0.0001) {
-            return price.toExponential(4);
-        } else if (price < 1) {
-            return price.toFixed(8);
-        } else {
-            return price.toFixed(4);
-        }
-    } catch (error) {
-        console.error('Error formatting price:', error);
-        return '0.00';
+    // Handle invalid cases
+    if (typeof num !== 'number' || isNaN(num)) {
+      return '0';
     }
+
+    return num.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2
+    });
+  } catch (error) {
+    console.error('Error formatting number:', error);
+    return '0';
+  }
 }
 
-// Extract token data from DexScreener response
-function extractTokenData(data) {
-    try {
-        if (!data.pairs || !Array.isArray(data.pairs) || data.pairs.length === 0) {
-            throw new Error('No pairs found');
-        }
-
-        const validPairs = data.pairs
-            .filter(pair => pair.liquidity?.usd && pair.priceUsd)
-            .sort((a, b) => 
-                (parseFloat(b.liquidity?.usd) || 0) - (parseFloat(a.liquidity?.usd) || 0)
-            );
-
-        if (validPairs.length === 0) {
-            throw new Error('No valid pairs found');
-        }
-
-        const mainPair = validPairs[0];
-        
-        return {
-            name: mainPair.baseToken.name,
-            symbol: mainPair.baseToken.symbol,
-            priceUsd: parseFloat(mainPair.priceUsd || 0),
-            priceNative: parseFloat(mainPair.priceNative || 0),
-            priceChange: {
-                m5: parseFloat(mainPair.priceChange?.m5 || 0),
-                h1: parseFloat(mainPair.priceChange?.h1 || 0),
-                h6: parseFloat(mainPair.priceChange?.h6 || 0),
-                h24: parseFloat(mainPair.priceChange?.h24 || 0)
-            },
-            transactions: mainPair.txns || {
-                m5: { buys: 0, sells: 0 },
-                h1: { buys: 0, sells: 0 },
-                h6: { buys: 0, sells: 0 },
-                h24: { buys: 0, sells: 0 }
-            },
-            marketCap: parseFloat(mainPair.fdv || mainPair.marketCap || 0),
-            liquidity: {
-                usd: parseFloat(mainPair.liquidity?.usd || 0),
-                base: parseFloat(mainPair.liquidity?.base || 0),
-                quote: parseFloat(mainPair.liquidity?.quote || 0)
-            },
-            volume: {
-                h24: parseFloat(mainPair.volume?.h24 || 0),
-                h6: parseFloat(mainPair.volume?.h6 || 0),
-                h1: parseFloat(mainPair.volume?.h1 || 0),
-                m5: parseFloat(mainPair.volume?.m5 || 0)
-            },
-            pairs: validPairs,
-            dexId: mainPair.dexId,
-            chainId: mainPair.chainId,
-            pairCreated: mainPair.pairCreatedAt
-        };
-    } catch (error) {
-        console.error('Error extracting token data:', error);
-        throw error;
+// Format token amount with appropriate decimals
+function formatTokenAmount(amount, decimals = 18) {
+  try {
+    const num = typeof amount === 'string' ? parseFloat(amount) : amount;
+    
+    if (typeof num !== 'number' || isNaN(num)) {
+      return '0';
     }
+
+    if (num === 0) {
+      return '0';
+    }
+
+    if (num < 0.000001) {
+      return num.toExponential(4);
+    }
+
+    return num.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: decimals
+    });
+  } catch (error) {
+    console.error('Error formatting token amount:', error);
+    return '0';
+  }
+}
+async function scanToken(address) {
+  try {
+    console.log(`Scanning token ${address} on all chains`);
+    const url = `https://api.dexscreener.com/latest/dex/tokens/${address}`;
+    console.log('DexScreener API URL:', url);
+
+    const response = await axios.get(url, { 
+      timeout: 10000,
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.data || !response.data.pairs || !Array.isArray(response.data.pairs)) {
+      console.log('Invalid response format from DexScreener');
+      return { success: false, message: 'Invalid response format' };
+    }
+
+    const pairs = response.data.pairs;
+    if (pairs.length === 0) {
+      console.log('No pairs found on any chain');
+      return { success: false, message: 'No liquidity pairs found' };
+    }
+
+    // Group pairs by chain
+    const ethPairs = pairs.filter(pair => pair.chainId === 'ethereum');
+    const bscPairs = pairs.filter(pair => pair.chainId === 'bsc');
+
+    // Sort each chain's pairs by liquidity
+    const sortByLiquidity = (pairs) => {
+      return pairs.sort((a, b) => {
+        const liquidityA = parseFloat(a.liquidity?.usd || 0);
+        const liquidityB = parseFloat(b.liquidity?.usd || 0);
+        return liquidityB - liquidityA;
+      });
+    };
+
+    const sortedEthPairs = sortByLiquidity(ethPairs);
+    const sortedBscPairs = sortByLiquidity(bscPairs);
+
+    // Choose the chain with the highest liquidity
+    let selectedChain;
+    let selectedPairs;
+    
+    const ethLiquidity = sortedEthPairs[0]?.liquidity?.usd || 0;
+    const bscLiquidity = sortedBscPairs[0]?.liquidity?.usd || 0;
+
+    if (ethLiquidity > bscLiquidity) {
+      selectedChain = 'eth';
+      selectedPairs = sortedEthPairs;
+    } else if (bscLiquidity > 0) {
+      selectedChain = 'bsc';
+      selectedPairs = sortedBscPairs;
+    } else if (ethLiquidity > 0) {
+      selectedChain = 'eth';
+      selectedPairs = sortedEthPairs;
+    } else {
+      console.log('No significant liquidity found on any chain');
+      return { success: false, message: 'No liquidity found' };
+    }
+
+    console.log(`Selected chain: ${selectedChain} with ${selectedPairs.length} pairs`);
+
+    if (selectedPairs.length === 0) {
+      return { success: false, message: 'No pairs found' };
+    }
+
+    return {
+      success: true,
+      chain: selectedChain,
+      data: {
+        pairs: selectedPairs,
+        baseToken: selectedPairs[0].baseToken,
+        quoteToken: selectedPairs[0].quoteToken,
+        pairAddress: selectedPairs[0].pairAddress,
+        dexId: selectedPairs[0].dexId
+      }
+    };
+
+  } catch (error) {
+    console.error('Error scanning token:', error.message);
+    return {
+      success: false,
+      message: error.response?.data?.error || error.message,
+      error: error
+    };
+  }
 }
 
+
+// Position-specific scanner for fetching current token data for positions
+async function fetchPositionTokenData(chain, tokenAddress) {
+  try {
+    const chainPath = chain.toLowerCase() === 'eth' ? 'ethereum' : 'bsc';
+    console.log(`Fetching position data for ${tokenAddress} on ${chainPath}`);
+    
+    // Use the latest API endpoint for positions as well
+    const url = `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`;
+    console.log('Position Scanner URL:', url);
+
+    const response = await axios.get(url, { 
+      timeout: 10000,
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.data || !response.data.pairs || !Array.isArray(response.data.pairs)) {
+      console.log('Invalid response format from DexScreener');
+      return null;
+    }
+
+    // Filter for the correct chain
+    const chainPairs = response.data.pairs.filter(pair => 
+      pair.chainId === (chain.toLowerCase() === 'eth' ? 'ethereum' : 'bsc')
+    );
+
+    if (chainPairs.length === 0) {
+      console.log('No pairs found for position');
+      return null;
+    }
+
+    // Sort by liquidity and get the most liquid pair
+    const sortedPairs = chainPairs.sort((a, b) => {
+      const liquidityA = parseFloat(a.liquidity?.usd || 0);
+      const liquidityB = parseFloat(b.liquidity?.usd || 0);
+      return liquidityB - liquidityA;
+    });
+
+    // Return position-specific data structure
+    const mainPair = sortedPairs[0];
+    return {
+      priceUsd: parseFloat(mainPair.priceUsd || 0),
+      priceNative: parseFloat(mainPair.priceNative || 0),
+      marketCap: parseFloat(mainPair.marketCap || mainPair.fdv || 0),
+      liquidity: {
+        usd: parseFloat(mainPair.liquidity?.usd || 0),
+        base: parseFloat(mainPair.liquidity?.base || 0),
+        quote: parseFloat(mainPair.liquidity?.quote || 0)
+      },
+      volume: mainPair.volume || {},
+      txns: mainPair.txns || {},
+      dexId: mainPair.dexId,
+      pairAddress: mainPair.pairAddress,
+      baseToken: mainPair.baseToken,
+      quoteToken: mainPair.quoteToken,
+      priceChange: mainPair.priceChange || {},
+      labels: mainPair.labels || [],
+      info: mainPair.info || {},
+      tax: mainPair.tax || { buy: 3, sell: 3 }
+    };
+
+  } catch (error) {
+    console.error('Error fetching position token data:', error.message);
+    if (error.response) {
+      console.error('API Response:', error.response.data);
+    }
+    return null;
+  }
+}
+
+// Helper function to extract token data
+function extractTokenData(scanData) {
+  try {
+    const mainPair = scanData.pairs[0];
+    return {
+      symbol: mainPair.baseToken.symbol,
+      name: mainPair.baseToken.name,
+      address: mainPair.baseToken.address,
+      marketCap: parseFloat(mainPair.marketCap || mainPair.fdv || 0),
+      price: parseFloat(mainPair.priceUsd || 0),
+      priceNative: parseFloat(mainPair.priceNative || 0),
+      liquidity: {
+        usd: parseFloat(mainPair.liquidity?.usd || 0),
+        base: parseFloat(mainPair.liquidity?.base || 0),
+        quote: parseFloat(mainPair.liquidity?.quote || 0)
+      },
+      volume24h: parseFloat(mainPair.volume?.h24 || 0),
+      priceChange: mainPair.priceChange || {},
+      txns24h: mainPair.txns?.h24 || {}
+    };
+  } catch (error) {
+    console.error('Error extracting token data:', error);
+    return null;
+  }
+}
+
+// Format number with commas
+function formatNumberWithCommas(number) {
+  try {
+    return number.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2
+    });
+  } catch (error) {
+    return '0';
+  }
+}
+
+// Format price with appropriate decimals
+function formatPrice(price) {
+  if (!price || isNaN(price)) return '0.00';
+  
+  if (price < 0.000001) return price.toExponential(4);
+  if (price < 0.001) return price.toFixed(8);
+  if (price < 1) return price.toFixed(6);
+  if (price < 10) return price.toFixed(4);
+  if (price < 1000) return price.toFixed(2);
+  return formatNumberWithCommas(price);
+}
 // Calculate price impact
-function calculatePriceImpact(tokenData, chainName) {
+function calculatePriceImpact(data, chainName) {
     try {
-        if (!tokenData || !tokenData.liquidity) return 'N/A';
-
         const testAmount = 5;
-        let quoteLiquidity = 0;
-
-        const quoteSymbol = chainName.toLowerCase() === 'eth' ? 'WETH' : 'WBNB';
-        const liquidPools = tokenData.pairs.filter(pair => 
-            pair.quoteToken.symbol === quoteSymbol &&
-            pair.liquidity?.quote
-        );
-
-        if (liquidPools.length > 0) {
-            quoteLiquidity = parseFloat(liquidPools[0].liquidity.quote);
-        }
-
-        if (!quoteLiquidity || quoteLiquidity === 0) return 'N/A';
+        const liquidity = Number(data.liquidity?.quote) || 0;
+        if (liquidity === 0) return 'N/A';
         
-        const impact = (testAmount / quoteLiquidity) * 100;
+        const impact = (testAmount / liquidity) * 100;
         return impact.toFixed(2);
     } catch (error) {
-        console.error('Error calculating price impact:', error);
         return 'N/A';
     }
 }
 
-// Scan token using DexScreener
-async function getDexScreenerData(address, chain = 'eth') {
-    try {
-        const response = await axios.get(
-            `https://api.dexscreener.com/latest/dex/search?q=${address}`,
-            { timeout: 10000 }
-        );
-
-        if (!response.data.pairs || response.data.pairs.length === 0) {
-            return null;
-        }
-
-        const chainId = chain === 'eth' ? 'ethereum' : 'bsc';
-        const chainPairs = response.data.pairs.filter(p => p.chainId === chainId);
-
-        if (chainPairs.length === 0) return null;
-
-        return { ...response.data, pairs: chainPairs };
-    } catch (error) {
-        console.error('DexScreener fetch error:', error);
-        return null;
-    }
-}
-
-// Get audit data from EVA API
-async function getAuditData(address, chain = 'eth') {
-    try {
-        const url = `${config.EVA_API_BASE_URL}/getAuditbyToken/${chain}/${address}`;
-        const response = await axios.get(url, {
-            headers: {
-                'x-api-key': config.EVA_API_KEY
-            },
-            timeout: 30000
-        });
-        return response.data;
-    } catch (error) {
-        console.error('EVA API error:', error);
-        return null;
-    }
-}
-
-// Main scan function that combines both APIs
-async function scanToken(address, chain = 'eth') {
-    console.log(`Scanning token ${address} on ${chain} chain`);
-
-    try {
-        // Get DexScreener data first
-        const dexData = await getDexScreenerData(address, chain);
-        if (!dexData) {
-            return {
-                success: false,
-                error: 'Token not found on DexScreener',
-                chain
-            };
-        }
-
-        // Try to get audit data
-        const auditData = await getAuditData(address, chain);
-        
-        // Combine the data
-        const combinedData = {
-            ...dexData,
-            audit: auditData ? {
-                renounced: auditData.renounced || false,
-                AIaudit: auditData.AIaudit || {
-                    executiveSummary: {
-                        Privileges: 'N/A',
-                        MaliciousCode: 'N/A',
-                        TaxStructure: {
-                            'Initial Taxes': 'N/A',
-                            'Final Taxes': 'N/A',
-                            'Reduced after': 'N/A'
-                        },
-                        TransactionLimit: 'N/A',
-                        EnforcedFor: 'N/A',
-                        findings: []
-                    }
-                }
-            } : null
-        };
-
-        return {
-            success: true,
-            data: combinedData,
-            chain: chain
-        };
-
-    } catch (error) {
-        console.error('Scan error:', error);
-        return {
-            success: false,
-            error: error.message,
-            chain
-        };
-    }
-}
-
-function formatFindings(findings) {
-    if (!Array.isArray(findings)) {
-        return 'No findings available';
-    }
-    
-    return findings.map((finding, index, array) => {
-        const prefix = index === array.length - 1 ? '└' : '├';
-        return `${prefix} ${finding.rating || '⚪'} ${finding.issue || 'No issue description'}`
-    }).join('\n');
-}
-
-function getTradeVolume(transactions, period = 'h24') {
-    if (!transactions || !transactions[period]) return { buys: 0, sells: 0 };
-    return transactions[period];
-}
-
 module.exports = {
-    getDexScreenerUrl,
-    scanToken,
-    formatFindings,
-    extractTokenData,
-    calculatePriceImpact,
-    formatNumberWithCommas,
-    formatPrice,
-    getTradeVolume
+  scanToken,
+  fetchPositionTokenData,
+  extractTokenData,
+  formatNumberWithCommas,
+  formatPrice,
+  formatTokenAmount
 };
