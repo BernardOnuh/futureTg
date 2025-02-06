@@ -449,7 +449,7 @@ function createTradingButtons(chainName, tradeMode = 'buy', currentWallet = 'wal
           Markup.button.callback('Sell Custom', 'sell_custom')
       ]);
       buttons.push([
-          Markup.button.callback('🚨 Emergency', 'sell_emergency')
+          Markup.button.callback('🚨 Auto Slippage Sell', 'sell_emergency')
       ]);
   }
 
@@ -637,8 +637,7 @@ async function createPositionButtons(ctx, position, currentWallet = 'wallet1') {
                   Markup.button.callback('Sell Custom', 'sell_custom')
               ],
               [
-                  Markup.button.callback('⚡ Instant Sell', 'sell_instant'),
-                  Markup.button.callback('🚨 Sell Emergency', 'sell_emergency')
+                  Markup.button.callback('🚨 Auto Slippage Sell', 'sell_emergency')
               ]
           );
       } else {
