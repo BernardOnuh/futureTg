@@ -206,106 +206,122 @@ async function getTokenBalances(userId, tokenAddress, chain) {
 
 
 
+// Update formatBriefResponse function to properly escape Markdown
 async function formatBriefResponse(data, address, chainName, userId, tradeMode = 'buy', currentWallet = 'wallet1') {
   try {
-      const pairData = data.pairs[0];
-      const tokenData = pairData.baseToken;
-      const poolVersion = pairData.labels?.[0] || 'v2';
-      
-      // Fetch current wallet settings
-      const settings = await axios.get(`${BASE_URL}/wallet/evm/settings/${userId}/${currentWallet}`);
-      const { slippage = 10, gas_limit = 500000 } = settings.data.settings;
-      
-      // Safe number parsing
-      const priceUsd = parseFloat(pairData.priceUsd || 0);
-      const priceNative = parseFloat(pairData.priceNative || 0);
-      const marketCap = parseFloat(pairData.marketCap || pairData.fdv || 0);
-      const liquidityUsd = parseFloat(pairData.liquidity?.usd || 0);
-      
-      // Calculate ratios
-      const mcLiqRatio = liquidityUsd > 0 ? (marketCap / liquidityUsd).toFixed(2) : '0.00';
-      const liquidityPercent = marketCap > 0 ? ((liquidityUsd / marketCap) * 100).toFixed(2) : '0.00';
+    const pairData = data.pairs[0];
+    const tokenData = pairData.baseToken;
+    const poolVersion = pairData.labels?.[0] || 'v2';
+    
+    // Get user settings
+    const settings = await axios.get(`${BASE_URL}/wallet/evm/settings/${userId}/${currentWallet}`);
+    const { slippage = 10, gas_limit = 500000 } = settings.data.settings;
+    
+    // Safe number parsing with fallbacks
+    const priceUsd = parseFloat(pairData.priceUsd || 0);
+    const priceNative = parseFloat(pairData.priceNative || 0);
+    const marketCap = parseFloat(pairData.marketCap || pairData.fdv || 0);
+    const liquidityUsd = parseFloat(pairData.liquidity?.usd || 0);
+    
+    // Calculate ratios with safety checks
+    const mcLiqRatio = liquidityUsd > 0 ? (marketCap / liquidityUsd).toFixed(2) : '0.00';
+    const liquidityPercent = marketCap > 0 ? ((liquidityUsd / marketCap) * 100).toFixed(2) : '0.00';
 
-      // Transaction volume calculations
-      const buys24h = pairData.txns?.h24?.buys || 0;
-      const sells24h = pairData.txns?.h24?.sells || 0;
-      const volume24h = parseFloat(pairData.volume?.h24 || 0);
+    // Format message parts safely
+    const messageParts = [
+      `*${escapeMarkdown(tokenData.symbol)}* 🔗 ${chainName} Token`,
+      `*${poolVersion.toUpperCase()}* Pool`,
+      '',
+      `*CA:* \`${address}\``,
+      `*LP:* \`${pairData.pairAddress}\``,
+      '',
+      `*💰 Price:* $${formatPrice(priceUsd)}`,
+      `${chainName === 'BSC' ? 'BNB' : 'ETH'} | ${formatPrice(priceNative)} ≈ $${formatPrice(priceUsd)}`,
+      '',
+      `*💧 Liquidity |* $${formatNumberWithCommas(liquidityUsd)} (${liquidityPercent}%)`,
+      '',
+      `*📈 MC/Liq:* ${mcLiqRatio}`,
+      '',
+      `*🌐 Market Cap* | $${formatNumberWithCommas(marketCap)}`,
+      '',
+      '*📊 Price Changes:*',
+      `*5m:* ${(pairData.priceChange?.m5 || 0).toFixed(2)}%`,
+      `*1h:* ${(pairData.priceChange?.h1 || 0).toFixed(2)}%`,
+      `*6h:* ${(pairData.priceChange?.h6 || 0).toFixed(2)}%`,
+      `*24h:* ${(pairData.priceChange?.h24 || 0).toFixed(2)}%`
+    ];
 
-      const scanBaseUrl = chainName === 'BSC' ? 'https://bscscan.com' : 'https://etherscan.io';
-      const caLink = `${scanBaseUrl}/token/${tokenData.address}`;
-      const lpLink = `${scanBaseUrl}/address/${pairData.pairAddress}`;
-      
-      // Build message parts in array
-      const messageParts = [
-          `*${tokenData.symbol}* 🔗 ${chainName} Token`,
-          ` *${poolVersion.toUpperCase()}* Pool`,
-          '',
-          `*CA:*  \`${tokenData.address}\``,
-          `*LP:* \`${pairData.pairAddress}\``,
-          '',
-          `*💰 Price:* $${formatPrice(priceUsd)}`,
-          `${chainName === 'BSC' ? 'BNB' : 'ETH'} | ${formatPrice(priceNative)} ≈ $${formatPrice(priceUsd)}`,
-          '',
-          `*💧 Liquidity |* $${formatNumberWithCommas(liquidityUsd)} (${liquidityPercent}%)`,
-          '',
-          `*📈 MC/Liq:* ${mcLiqRatio}`,
-          '',
-          `*🌐 Market Cap* | $${formatNumberWithCommas(marketCap)}`,
-          '',
-          '*📊 Price Changes:*',
-          `*5m:* ${pairData.priceChange?.m5?.toFixed(2) || '0.00'}%`,
-          `*1h:* ${pairData.priceChange?.h1?.toFixed(2) || '0.00'}%`,
-          `*6h:* ${pairData.priceChange?.h6?.toFixed(2) || '0.00'}%`,
-          `*24h:* ${pairData.priceChange?.h24?.toFixed(2) || '0.00'}%`,
-          '',
-          '*📈 24h Activity*:',
-          `*Volume:* $${formatNumberWithCommas(volume24h)}`,
-          `*Buys:* ${buys24h}`,
-          `*Sells:* ${sells24h}`,
-          '',
-          '⚙️ Trading Settings:',
-          `*Current Wallet:* ${currentWallet}`,
-          `*Slippage:* ${slippage}%`,
-          `*Gas Limit:* ${formatNumberWithCommas(gas_limit)}`,
-          ''
-      ];
+    // Add market activity if available
+    if (pairData.txns?.h24) {
+      messageParts.push(
+        '',
+        '*📈 24h Activity:*',
+        `*Volume:* $${formatNumberWithCommas(pairData.volume?.h24 || 0)}`,
+        `*Buys:* ${pairData.txns.h24.buys || 0}`,
+        `*Sells:* ${pairData.txns.h24.sells || 0}`
+      );
+    }
 
-      // Add social links if available
-      if (pairData.info?.socials?.length > 0) {
-          messageParts.push('🔗 Links:');
-          pairData.info.socials.forEach(social => {
-              messageParts.push(`${social.type === 'telegram' ? '📱' : '🐦'} ${social.url}`);
-          });
-          messageParts.push('');
-      }
+    // Add trading settings
+    messageParts.push(
+      '',
+      '⚙️ Trading Settings:',
+      `*Current Wallet:* ${currentWallet}`,
+      `*Slippage:* ${slippage}%`,
+      `*Gas Limit:* ${formatNumberWithCommas(gas_limit)}`
+    );
 
-      // Get wallet balances
-      const walletBalances = await getWalletBalances(userId, chainName);
-      if (walletBalances.length > 0) {
-          messageParts.push('💰 Your Balances:');
-          messageParts.push(...walletBalances.map(wallet => 
-              `👛 ${wallet.name}: ${wallet.balance} ${chainName === 'BSC' ? 'BNB' : 'ETH'}`
-          ));
-      }
+    // Add social links with validation
+    if (pairData.info?.socials?.length > 0) {
+      messageParts.push('', '🔗 Links:');
+      pairData.info.socials.forEach(social => {
+        if (isValidUrl(social.url)) {
+          messageParts.push(`${social.type === 'telegram' ? '📱' : '🐦'} ${escapeMarkdown(social.url)}`);
+        }
+      });
+    }
 
-      // Get token balances
-      const tokenBalances = await getTokenBalances(userId, address, chainName);
-      if (tokenBalances.length > 0) {
-          messageParts.push('');
-          messageParts.push(...tokenBalances.map(balance => 
-              `🪙 ${balance.name}: ${Number(balance.balance || 0).toFixed(4)} ${balance.symbol || tokenData.symbol}`
-          ));
-      }
+    // Add wallet balances
+    const walletBalances = await getWalletBalances(userId, chainName);
+    if (walletBalances.length > 0) {
+      messageParts.push('', '💰 Your Balances:');
+      walletBalances.forEach(wallet => {
+        messageParts.push(`👛 ${wallet.name}: ${wallet.balance} ${chainName === 'BSC' ? 'BNB' : 'ETH'}`);
+      });
+    }
 
-      // Add trading instruction
-      messageParts.push('', `To ${tradeMode}, press one of the buttons below:`);
+    // Add token balances
+    const tokenBalances = await getTokenBalances(userId, address, chainName);
+    if (tokenBalances.length > 0) {
+      messageParts.push('');
+      tokenBalances.forEach(balance => {
+        messageParts.push(`🪙 ${balance.name}: ${Number(balance.balance || 0).toFixed(4)} ${balance.symbol || tokenData.symbol}`);
+      });
+    }
 
-      // Join all parts with newlines
-      return messageParts.join('\n');
+    // Add trading instruction
+    messageParts.push('', `To ${tradeMode}, press one of the buttons below:`);
 
+    return messageParts.join('\n');
   } catch (error) {
-      console.error('Error formatting token display:', error, error.stack);
-      return 'Error formatting token information. Please try again.';
+    console.error('Error formatting token display:', error);
+    throw new Error('Error formatting token information');
+  }
+}
+
+// Helper function to escape Markdown characters
+function escapeMarkdown(text) {
+  if (!text) return '';
+  return text.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
+}
+
+// Helper function to validate URLs
+function isValidUrl(string) {
+  try {
+    new URL(string);
+    return true;
+  } catch (_) {
+    return false;
   }
 }
 
@@ -1716,160 +1732,162 @@ bot.action('switch_wallet', async (ctx) => {
 
 
 bot.on('text', async (ctx) => {
-    try {
-      if (!ctx.session) {
-        ctx.session = {};
+  try {
+    if (!ctx.session) {
+      ctx.session = {};
+    }
+
+    if (settingsCommands.handleText) {
+      const handled = await settingsCommands.handleText(ctx);
+      if (handled) return;
+    }
+
+    const userId = ctx.from.id;
+    const messageHasReply = ctx.message.reply_to_message;
+    const userState = commands.userStates.get(userId);
+
+    // Handle wallet import
+    if (userState?.action === 'import' && messageHasReply) {
+      if (messageHasReply.message_id !== userState.requestMessageId) return;
+      try {
+        const privateKey = ctx.message.text.trim();
+        await ctx.deleteMessage().catch(e => console.log('Could not delete message:', e));
+        await commands.importWallet(ctx, privateKey, userState.walletNumber);
+        commands.userStates.delete(userId);
+        await ctx.telegram.deleteMessage(ctx.chat.id, userState.requestMessageId)
+          .catch(e => console.log('Could not delete request message:', e));
+      } catch (error) {
+        console.error('Error processing private key:', error);
+        await ctx.reply('❌ Invalid private key format. Please try again.');
+        commands.userStates.delete(userId);
       }
-  
-      if (settingsCommands.handleText) {
-        const handled = await settingsCommands.handleText(ctx);
-        if (handled) return;
-      }
-  
-      const userId = ctx.from.id;
-      const messageHasReply = ctx.message.reply_to_message;
-      const userState = commands.userStates.get(userId);
-  
-      // Handle wallet import
-      if (userState?.action === 'import' && messageHasReply) {
-        if (messageHasReply.message_id !== userState.requestMessageId) return;
-        try {
-          const privateKey = ctx.message.text.trim();
-          await ctx.deleteMessage().catch(e => console.log('Could not delete message:', e));
-          await commands.importWallet(ctx, privateKey, userState.walletNumber);
-          commands.userStates.delete(userId);
-          await ctx.telegram.deleteMessage(ctx.chat.id, userState.requestMessageId)
-            .catch(e => console.log('Could not delete request message:', e));
-        } catch (error) {
-          console.error('Error processing private key:', error);
-          await ctx.reply('❌ Invalid private key format. Please try again.');
-          commands.userStates.delete(userId);
-        }
-        return;
-      }
-  
-      // Handle trade amount input
-      if (ctx.session?.tradeState?.waitingForAmount && messageHasReply) {
-        if (messageHasReply.message_id !== ctx.session.tradeState.messageId) return;
-  
-        try {
-          const input = ctx.message.text.trim();
-          const mode = ctx.session.tradeState.action;
-          const currentWallet = ctx.session?.currentWallet || 'wallet1';
-  
-          // Get user settings
-          const settings = await axios.get(`${BASE_URL}/wallet/evm/settings/${userId}/${currentWallet}`);
-          const { slippage = 10, gas_limit = 500000 } = settings.data.settings;
-  
-          let amount;
-          // Handle percentage for sells
-          if (mode === 'sell' && input.endsWith('%')) {
-            const percentage = parseFloat(input);
-            if (isNaN(percentage) || percentage <= 0 || percentage > 100) {
-              return ctx.reply('❌ Please enter a valid percentage between 0 and 100');
-            }
-            const tokenBalances = await getTokenBalances(userId, ctx.session.pendingTrade.tokenAddress, ctx.session.pendingTrade.chain);
-            const balance = tokenBalances.find(b => b.rawBalance > 0);
-            if (!balance || balance.rawBalance <= 0) {
-              return ctx.reply('❌ No token balance found');
-            }
-            amount = (BigInt(balance.rawBalance.toString()) * BigInt(Math.floor(percentage * 100))) / BigInt(10000);
-          } else {
-            amount = parseFloat(input);
-            if (isNaN(amount) || amount <= 0) {
-              return ctx.reply('❌ Please enter a valid amount');
-            }
-  
-            // Validate amount against balance for buys
-            if (mode === 'buy') {
-              const walletBalances = await getWalletBalances(userId, ctx.session.pendingTrade.chain);
-              const currentBalance = walletBalances.find(w => w.name === currentWallet);
-              if (!currentBalance || parseFloat(currentBalance.balance) < amount) {
-                return ctx.reply('❌ Insufficient balance');
-              }
+      return;
+    }
+
+    // Handle trade amount input
+    if (ctx.session?.tradeState?.waitingForAmount && messageHasReply) {
+      if (messageHasReply.message_id !== ctx.session.tradeState.messageId) return;
+
+      try {
+        const input = ctx.message.text.trim();
+        const mode = ctx.session.tradeState.action;
+        const currentWallet = ctx.session?.currentWallet || 'wallet1';
+
+        // Get user settings
+        const settings = await axios.get(`${BASE_URL}/wallet/evm/settings/${userId}/${currentWallet}`);
+        const { slippage = 10, gas_limit = 500000 } = settings.data.settings;
+
+        let amount;
+        // Handle percentage for sells
+        if (mode === 'sell' && input.endsWith('%')) {
+          const percentage = parseFloat(input);
+          if (isNaN(percentage) || percentage <= 0 || percentage > 100) {
+            return ctx.reply('❌ Please enter a valid percentage between 0 and 100');
+          }
+          const tokenBalances = await getTokenBalances(userId, ctx.session.pendingTrade.tokenAddress, ctx.session.pendingTrade.chain);
+          const balance = tokenBalances.find(b => b.rawBalance > 0);
+          if (!balance || balance.rawBalance <= 0) {
+            return ctx.reply('❌ No token balance found');
+          }
+          amount = (BigInt(balance.rawBalance.toString()) * BigInt(Math.floor(percentage * 100))) / BigInt(10000);
+        } else {
+          amount = parseFloat(input);
+          if (isNaN(amount) || amount <= 0) {
+            return ctx.reply('❌ Please enter a valid amount');
+          }
+
+          // Validate amount against balance for buys
+          if (mode === 'buy') {
+            const walletBalances = await getWalletBalances(userId, ctx.session.pendingTrade.chain);
+            const currentBalance = walletBalances.find(w => w.name === currentWallet);
+            if (!currentBalance || parseFloat(currentBalance.balance) < amount) {
+              return ctx.reply('❌ Insufficient balance');
             }
           }
-  
-          // Update pending trade
-          ctx.session.pendingTrade = {
-            ...ctx.session.pendingTrade,
-            amount: amount.toString(),
-            slippage: slippage,
-            gasLimit: gas_limit
-          };
-  
-          // Execute trade directly
-          await executeTrade(ctx, amount.toString(), mode);
-  
-          // Clean up trade state
-          delete ctx.session.tradeState;
-  
-        } catch (error) {
-          console.error('Error processing trade amount:', error);
-          await ctx.reply('❌ Error processing amount. Please try again.');
         }
-        return;
+
+        // Update pending trade
+        ctx.session.pendingTrade = {
+          ...ctx.session.pendingTrade,
+          amount: amount.toString(),
+          slippage: slippage,
+          gasLimit: gas_limit
+        };
+
+        // Execute trade directly
+        await executeTrade(ctx, amount.toString(), mode);
+
+        // Clean up trade state
+        delete ctx.session.tradeState;
+
+      } catch (error) {
+        console.error('Error processing trade amount:', error);
+        await ctx.reply('❌ Error processing amount. Please try again.');
       }
-  
-      // Handle token scanning
-      const addressRegex = /(0x[a-fA-F0-9]{40})/;
-      const match = ctx.message.text.match(addressRegex);
-      
-      if (match) {
-        const address = match[1];
-  
-        try {
-          const scanningMsg = await ctx.reply('🔍 Scanning token on all chains...', {
-            reply_to_message_id: ctx.message.message_id
-          });
-  
-          const scanResult = await scanToken(address);
-          
-          if (!scanResult.success) {
-            await ctx.telegram.editMessageText(
-              ctx.chat.id,
-              scanningMsg.message_id,
-              null,
-              '❌ Token not found or has no liquidity. Please check the address and try again.'
-            );
-            return;
-          }
-  
-          ctx.session.lastScan = {
-            result: {
-              chain: scanResult.chain,
-              data: scanResult.data
-            },
-            address: address,
-            data: scanResult.data
-          };
-  
-          const chainName = scanResult.chain.toUpperCase();
-          const message = await formatBriefResponse(
-            scanResult.data,
-            address,
-            chainName,
-            ctx.from.id,
-            'buy',
-            ctx.session?.currentWallet || 'wallet1'
-          );
-  
-          const buttons = createTradingButtons(chainName);
-          const inlineKeyboard = Markup.inlineKeyboard(buttons);
-  
+      return;
+    }
+
+    // Handle token scanning
+    const addressRegex = /(0x[a-fA-F0-9]{40})/;
+    const match = ctx.message.text.match(addressRegex);
+    
+    if (match) {
+      const address = match[1];
+      let scanningMsg;
+
+      try {
+        scanningMsg = await ctx.reply('🔍 Scanning token on all chains...', {
+          reply_to_message_id: ctx.message.message_id
+        });
+
+        const scanResult = await scanToken(address);
+        
+        if (!scanResult.success) {
           await ctx.telegram.editMessageText(
             ctx.chat.id,
             scanningMsg.message_id,
             null,
-            message,
-            {
-              parse_mode: 'Markdown',
-              ...inlineKeyboard
-            }
+            '❌ Token not found or has no liquidity. Please check the address and try again.'
           );
-  
-        } catch (error) {
-          console.error('Error scanning token:', error);
+          return;
+        }
+
+        ctx.session.lastScan = {
+          result: {
+            chain: scanResult.chain,
+            data: scanResult.data
+          },
+          address: address,
+          data: scanResult.data
+        };
+
+        const chainName = scanResult.chain.toUpperCase();
+        const message = await formatBriefResponse(
+          scanResult.data,
+          address,
+          chainName,
+          ctx.from.id,
+          'buy',
+          ctx.session?.currentWallet || 'wallet1'
+        );
+
+        const buttons = createTradingButtons(chainName);
+        const inlineKeyboard = Markup.inlineKeyboard(buttons);
+
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          scanningMsg.message_id,
+          null,
+          message,
+          {
+            parse_mode: 'Markdown',
+            ...inlineKeyboard
+          }
+        );
+
+      } catch (error) {
+        console.error('Error scanning token:', error);
+        if (scanningMsg) {
           await ctx.telegram.editMessageText(
             ctx.chat.id,
             scanningMsg.message_id,
@@ -1878,11 +1896,12 @@ bot.on('text', async (ctx) => {
           );
         }
       }
-    } catch (error) {
-      console.error('Error in text handler:', error);
-      ctx.reply('❌ An error occurred. Please try again.');
     }
-  });
+  } catch (error) {
+    console.error('Error in text handler:', error);
+    await ctx.reply('❌ An error occurred. Please try again.');
+  }
+});
 
 
 // Helper function to handle trade amount input
