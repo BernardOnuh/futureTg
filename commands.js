@@ -23,7 +23,7 @@ module.exports = {
           Markup.button.callback(`👝Wallet`, 'wallet'),
         ],
         [
-          Markup.button.callback(`📊Position`, 'show_positions_message'),
+          Markup.button.callback(`📊Positions`, 'show_positions_message'),
           Markup.button.callback(`⚙️Settings`, 'settings'),
         ],
         [
