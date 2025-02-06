@@ -48,26 +48,26 @@ bot.command('scanner', commands.scanner);
 bot.command('settings', settingsCommands.settings);
 bot.command('positions', async (ctx) => {
   try {
-      const response = await axios.get(`${BASE_URL}/trade/positions/${ctx.from.id}?status=open`);
-      const positions = response.data;
+    const response = await axios.get(`${BASE_URL}/trade/positions/${ctx.from.id}?status=open`);
+    const positions = response.data;
 
-      if (!positions || positions.length === 0) {
-          return ctx.reply('No open positions found. Use /scanner to find and buy tokens.');
-      }
+    if (!positions || positions.length === 0) {
+      return ctx.reply('No open positions found. Use /scanner to find and buy tokens.');
+    }
 
-      if (!ctx.session) {
-        ctx.session = {};
-      }
-      
-      ctx.session.positions = positions;
-      ctx.session.currentPositionIndex = 0;
-      ctx.session.tradeMode = 'sell';
+    if (!ctx.session) {
+      ctx.session = {};
+    }
+    
+    ctx.session.positions = positions;
+    ctx.session.currentPositionIndex = 0;
+    ctx.session.tradeMode = 'sell';
 
-      await displayPosition(ctx);
+    await displayPosition(ctx);
 
   } catch (error) {
-      console.error('Error fetching positions:', error);
-      ctx.reply('❌ Error fetching positions. Please try again.');
+    console.error('Error fetching positions:', error);
+    ctx.reply('❌ Error fetching positions. Please try again.');
   }
 });
 
@@ -939,47 +939,28 @@ async function displayPosition(ctx) {
       `👛 ${currentWallet}: No balance`;
 
     // Display position number (current/total)
-    // Display position number (current/total)
     const displayPositionNumber = positions.length - ctx.session.currentPositionIndex;
 
     // Format message with correct position numbering
     const message = await formatPositionMessage(ctx, position, walletText);
     const updatedMessage = message.replace(
-    `(#${ctx.session.currentPositionIndex + 1} of ${positions.length})`,
-    `(#${displayPositionNumber} of ${positions.length})`
+      `(#${ctx.session.currentPositionIndex + 1} of ${positions.length})`,
+      `(#${displayPositionNumber} of ${positions.length})`
     );
 
     const buttons = await createPositionButtons(ctx, position, currentWallet);
     const keyboard = Markup.inlineKeyboard(buttons);
 
-    try {
-      if (ctx.session.positionMessageId) {
-        await ctx.telegram.editMessageText(
-          ctx.chat.id,
-          ctx.session.positionMessageId,
-          null,
-          updatedMessage,
-          {
-            parse_mode: 'Markdown',
-            ...keyboard
-          }
-        );
-      } else {
-        const sentMessage = await ctx.reply(updatedMessage, keyboard);
-        ctx.session.positionMessageId = sentMessage.message_id;
-      }
-    } catch (error) {
-      if (error.description?.includes('message is not modified')) {
-        await ctx.answerCbQuery('Position data is up to date');
-      } else {
-        throw error;
-      }
-    }
+    // Always send a new message
+    return ctx.reply(updatedMessage, {
+      parse_mode: 'Markdown',
+      ...keyboard
+    });
 
   } catch (error) {
     console.error('Error displaying position:', error);
     if (!error.description?.includes('message is not modified')) {
-      ctx.reply('❌ Error displaying position. Please try again.');
+      return ctx.reply('❌ Error displaying position. Please try again.');
     }
   }
 }
