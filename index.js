@@ -428,7 +428,6 @@ function createTradingButtons(chainName, tradeMode = 'buy', currentWallet = 'wal
           Markup.button.callback('Buy X Tokens', 'buy_tokens')
       ]);
       buttons.push([
-          Markup.button.callback('Instant Buy', 'buy_instant'),
           Markup.button.callback('Ape Max', 'ape_max')
       ]);
   } else {
@@ -450,7 +449,6 @@ function createTradingButtons(chainName, tradeMode = 'buy', currentWallet = 'wal
           Markup.button.callback('Sell Custom', 'sell_custom')
       ]);
       buttons.push([
-          Markup.button.callback('⚡ Instant Sell', 'sell_instant'),
           Markup.button.callback('🚨 Emergency', 'sell_emergency')
       ]);
   }
