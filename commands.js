@@ -9,7 +9,12 @@ const userStates = new Map();
 const settingsHandler = require('./settings');
 const importRequestMessages = new Map();
 
-
+// ERC-20 Token ABI (simplified)
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function decimals() view returns (uint8)"
+];
 
 module.exports = {
   userStates,
@@ -41,18 +46,12 @@ module.exports = {
       ctx.replyWithMarkdown(
         `👋*Welcome* ${firstName} to Future Edge Trading Bot! \n\n` +
         `The *Fastest*⚡ and most *Reliable*🛡️ \n` +
-
         `🥏 Token Scanner \n\n` +
-        
         `🥏 Trade Bot \n\n` +
-
         `Paste📝 any Token Contract Address on *Eth || Bsc* on this bot to Scan & Trade \n\n` +
-
         `*Eth || Bsc* \n\n` +
         `Wallet:*Connected*\n\n` +
-
         `Price $${ethPrice}(ETH/USDT) \n\n` +
-
         `Price $${bscPrice}(BNB/USDT) \n\n`,
         Homekeyboard
       );
@@ -66,8 +65,6 @@ module.exports = {
     ctx.reply('You asked for help!');
   },
 
-
-  
   async buysellCommand(ctx) {
     try {
       if (ctx.callbackQuery) {
@@ -111,10 +108,13 @@ module.exports = {
           Markup.button.callback('Transfer ETH', 'transfer_eth'),
           Markup.button.callback('Transfer BNB', 'transfer_bnb')
         ],
+        [
+          Markup.button.callback('Transfer Token', 'transfer_token')
+        ],
         [Markup.button.callback('🔙 Back to Home', 'home')]
       ]);
 
-      await ctx.reply('Select which coin to transfer:', transferKeyboard);
+      await ctx.reply('Select which coin or token to transfer:', transferKeyboard);
     } catch (error) {
       console.error('Error in transfer command:', error);
       await ctx.reply('Error accessing wallet information. Please try again.');
@@ -314,8 +314,6 @@ module.exports = {
       await ctx.reply('Invalid private key or error importing wallet. Please try again.');
     }
   },
-
-  
 
   setupWalletActions(bot) {
     // Create new wallet action
@@ -640,6 +638,12 @@ bot.action(/select_transfer_(eth|bnb)_wallet(\d)/, async (ctx) => {
           case 'transfer_amount':
             await handleTransferAmountReply(ctx, userState);
             break;
+          case 'transfer_token_address':
+            await handleTransferTokenAddressReply(ctx, userState);
+            break;
+          case 'transfer_token_amount':
+            await handleTransferTokenAmountReply(ctx, userState);
+            break;
         }
       } catch (error) {
         console.error('Error processing message:', error);
@@ -715,17 +719,17 @@ bot.action(/select_transfer_(eth|bnb)_wallet(\d)/, async (ctx) => {
     }
   },
 
-  async handleTransferAddressReply(ctx, userState) {
+  async handleTransferTokenAddressReply(ctx, userState) {
     try {
-      const address = ctx.message.text.trim();
+      const tokenAddress = ctx.message.text.trim();
       
-      if (!this.isValidAddress(address)) {
-        throw new Error('Invalid address format');
+      if (!this.isValidAddress(tokenAddress)) {
+        throw new Error('Invalid token address format');
       }
 
       // Send message with force reply for amount
       const message = await ctx.reply(
-        `💰 Enter the amount of ${userState.coin} to transfer:`,
+        `💰 Enter the amount of tokens to transfer:`,
         {
           reply_markup: {
             force_reply: true,
@@ -736,17 +740,17 @@ bot.action(/select_transfer_(eth|bnb)_wallet(\d)/, async (ctx) => {
 
       userStates.set(ctx.from.id, {
         ...userState,
-        action: 'transfer_amount',
-        destinationAddress: address,
+        action: 'transfer_token_amount',
+        tokenAddress: tokenAddress,
         requestMessageId: message.message_id
       });
 
     } catch (error) {
-      throw new Error('Invalid address format');
+      throw new Error('Invalid token address format');
     }
   },
 
-  async handleTransferAmountReply(ctx, userState) {
+  async handleTransferTokenAmountReply(ctx, userState) {
     try {
       const amount = parseFloat(ctx.message.text.trim());
       
@@ -768,25 +772,28 @@ bot.action(/select_transfer_(eth|bnb)_wallet(\d)/, async (ctx) => {
 
       const walletSigner = new ethers.Wallet(wallet.private_key, provider);
       
-      const balance = await provider.getBalance(wallet.address);
-      const formattedBalance = ethers.formatEther(balance);
+      const tokenContract = new ethers.Contract(userState.tokenAddress, ERC20_ABI, walletSigner);
+      
+      const decimals = await tokenContract.decimals();
+      const balance = await tokenContract.balanceOf(wallet.address);
+      const formattedBalance = ethers.formatUnits(balance, decimals);
 
       if (amount > parseFloat(formattedBalance)) {
-        throw new Error(`Insufficient balance. Available: ${formattedBalance} ${userState.coin}`);
+        throw new Error(`Insufficient balance. Available: ${formattedBalance} tokens`);
       }
 
-      const tx = await walletSigner.sendTransaction({
-        to: userState.destinationAddress,
-        value: ethers.parseEther(amount.toString())
-      });
+      const tx = await tokenContract.transfer(
+        userState.destinationAddress,
+        ethers.parseUnits(amount.toString(), decimals)
+      );
 
       const explorerUrl = userState.coin === 'ETH'
         ? `https://etherscan.io/tx/${tx.hash}`
         : `https://bscscan.com/tx/${tx.hash}`;
 
       await ctx.reply(
-        `✅ Transfer initiated!\n\n` +
-        `Amount: ${amount} ${userState.coin}\n` +
+        `✅ Token transfer initiated!\n\n` +
+        `Amount: ${amount} tokens\n` +
         `To: ${userState.destinationAddress}\n\n` +
         `🔗 [View on Explorer](${explorerUrl})`,
         { parse_mode: 'Markdown' }
