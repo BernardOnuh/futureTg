@@ -5,6 +5,7 @@ const config = require('./config');
 const commands = require('./commands');
 const middlewares = require('./middlewares');
 const settingsCommands = require('./settings');
+const userStates = new Map();
 
 const { 
     scanToken,
@@ -1730,21 +1731,21 @@ bot.action('switch_wallet', async (ctx) => {
   }
 });
 
-
 bot.on('text', async (ctx) => {
   try {
     if (!ctx.session) {
       ctx.session = {};
     }
 
+    const userId = ctx.from.id;
+    const messageHasReply = ctx.message.reply_to_message;
+    const userState = commands.userStates.get(userId);
+
+    // Handle settings first if applicable
     if (settingsCommands.handleText) {
       const handled = await settingsCommands.handleText(ctx);
       if (handled) return;
     }
-
-    const userId = ctx.from.id;
-    const messageHasReply = ctx.message.reply_to_message;
-    const userState = commands.userStates.get(userId);
 
     // Handle wallet import
     if (userState?.action === 'import' && messageHasReply) {
@@ -1762,6 +1763,139 @@ bot.on('text', async (ctx) => {
         commands.userStates.delete(userId);
       }
       return;
+    }
+
+    // Handle transfer actions
+    if (userState?.action && messageHasReply && 
+        messageHasReply.message_id === userState.requestMessageId) {
+      
+      if (userState.action === 'transfer_address') {
+        try {
+          const address = ctx.message.text.trim();
+          if (!ethers.isAddress(address)) {
+            await ctx.reply('❌ Invalid address format. Please enter a valid address.');
+            return;
+          }
+
+          const message = await ctx.reply(
+            `💰 Enter the amount of ${userState.coin} to transfer:\n` +
+            `Available Balance: ${Number(userState.balance).toFixed(4)} ${userState.coin}`,
+            {
+              reply_markup: {
+                force_reply: true,
+                selective: true
+              }
+            }
+          );
+
+          commands.userStates.set(userId, {
+            ...userState,
+            action: 'transfer_amount',
+            destinationAddress: address,
+            requestMessageId: message.message_id
+          });
+        } catch (error) {
+          console.error('Error processing transfer address:', error);
+          await ctx.reply('❌ Error processing address. Please try again.');
+          commands.userStates.delete(userId);
+        }
+        return;
+      }
+
+      if (userState.action === 'transfer_amount') {
+        try {
+          const amount = parseFloat(ctx.message.text.trim());
+          if (isNaN(amount) || amount <= 0) {
+            await ctx.reply('❌ Please enter a valid amount greater than 0.');
+            return;
+          }
+      
+          if (amount > parseFloat(userState.balance)) {
+            await ctx.reply(`❌ Insufficient balance. Available: ${Number(userState.balance).toFixed(4)} ${userState.coin}`);
+            return;
+          }
+      
+          const walletResponse = await axios.get(`${BASE_URL}/wallet/evm/${userId}`);
+          const wallet = walletResponse.data.find(w => w.name === userState.sourceWallet);
+          
+          if (!wallet) {
+            throw new Error('Wallet not found');
+          }
+      
+          const provider = userState.coin === 'ETH'
+            ? new ethers.JsonRpcProvider(process.env.ETH_RPC_URL)
+            : new ethers.JsonRpcProvider(process.env.BSC_RPC_URL);
+      
+          const walletSigner = new ethers.Wallet(wallet.private_key, provider);
+          const progressMsg = await ctx.reply('🔄 Processing transfer...');
+      
+          try {
+            // Convert amount to Wei
+            const amountInWei = ethers.parseEther(amount.toString());
+      
+            // Estimate gas for the transaction
+            const gasEstimate = await provider.estimateGas({
+              to: userState.destinationAddress,
+              value: amountInWei
+            });
+      
+            // Add 20% buffer to gas estimate
+            const gasLimit = Math.floor(Number(gasEstimate) * 1.2);
+      
+            // Execute the transaction
+            const tx = await walletSigner.sendTransaction({
+              to: userState.destinationAddress,
+              value: amountInWei,
+              gasLimit: BigInt(gasLimit)
+            });
+      
+            // Wait for transaction confirmation
+            const receipt = await tx.wait();
+      
+            const explorerUrl = userState.coin === 'ETH'
+              ? `https://etherscan.io/tx/${tx.hash}`
+              : `https://bscscan.com/tx/${tx.hash}`;
+      
+            await ctx.telegram.editMessageText(
+              ctx.chat.id,
+              progressMsg.message_id,
+              null,
+              `✅ Transfer Successful!\n\n` +
+              `Amount: ${amount} ${userState.coin}\n` +
+              `To: ${userState.destinationAddress}\n\n` +
+              `🔗 [View Transaction](${explorerUrl})`,
+              {
+                parse_mode: 'Markdown',
+                disable_web_page_preview: true
+              }
+            );
+      
+          } catch (txError) {
+            console.error('Transaction error:', txError);
+            let errorMessage = '❌ Transaction failed. ';
+            
+            if (txError.message.includes('insufficient funds')) {
+              errorMessage += 'Insufficient funds to cover gas fees.';
+            } else {
+              errorMessage += 'Please try again.';
+            }
+            
+            await ctx.telegram.editMessageText(
+              ctx.chat.id,
+              progressMsg.message_id,
+              null,
+              errorMessage
+            );
+          }
+      
+        } catch (error) {
+          console.error('Error processing transfer:', error);
+          await ctx.reply('❌ Error processing transfer. Please try again.');
+        } finally {
+          commands.userStates.delete(userId);
+        }
+        return;
+      }
     }
 
     // Handle trade amount input
@@ -1827,76 +1961,79 @@ bot.on('text', async (ctx) => {
       return;
     }
 
-    // Handle token scanning
-    const addressRegex = /(0x[a-fA-F0-9]{40})/;
-    const match = ctx.message.text.match(addressRegex);
-    
-    if (match) {
-      const address = match[1];
-      let scanningMsg;
+    // Only proceed with token scanning if no other actions are being handled
+    if (!userState?.action) {
+      const addressRegex = /(0x[a-fA-F0-9]{40})/;
+      const match = ctx.message.text.match(addressRegex);
+      
+      if (match) {
+        const address = match[1];
+        let scanningMsg;
 
-      try {
-        scanningMsg = await ctx.reply('🔍 Scanning token on all chains...', {
-          reply_to_message_id: ctx.message.message_id
-        });
+        try {
+          scanningMsg = await ctx.reply('🔍 Scanning token on all chains...', {
+            reply_to_message_id: ctx.message.message_id
+          });
 
-        const scanResult = await scanToken(address);
-        
-        if (!scanResult.success) {
-          await ctx.telegram.editMessageText(
-            ctx.chat.id,
-            scanningMsg.message_id,
-            null,
-            '❌ Token not found or has no liquidity. Please check the address and try again.'
-          );
-          return;
-        }
-
-        ctx.session.lastScan = {
-          result: {
-            chain: scanResult.chain,
-            data: scanResult.data
-          },
-          address: address,
-          data: scanResult.data
-        };
-
-        const chainName = scanResult.chain.toUpperCase();
-        const message = await formatBriefResponse(
-          scanResult.data,
-          address,
-          chainName,
-          ctx.from.id,
-          'buy',
-          ctx.session?.currentWallet || 'wallet1'
-        );
-
-        const buttons = createTradingButtons(chainName);
-        const inlineKeyboard = Markup.inlineKeyboard(buttons);
-
-        await ctx.telegram.editMessageText(
-          ctx.chat.id,
-          scanningMsg.message_id,
-          null,
-          message,
-          {
-            parse_mode: 'Markdown',
-            ...inlineKeyboard
+          const scanResult = await scanToken(address);
+          
+          if (!scanResult.success) {
+            await ctx.telegram.editMessageText(
+              ctx.chat.id,
+              scanningMsg.message_id,
+              null,
+              '❌ Token not found or has no liquidity. Please check the address and try again.'
+            );
+            return;
           }
-        );
 
-      } catch (error) {
-        console.error('Error scanning token:', error);
-        if (scanningMsg) {
+          ctx.session.lastScan = {
+            result: {
+              chain: scanResult.chain,
+              data: scanResult.data
+            },
+            address: address,
+            data: scanResult.data
+          };
+
+          const chainName = scanResult.chain.toUpperCase();
+          const message = await formatBriefResponse(
+            scanResult.data,
+            address,
+            chainName,
+            ctx.from.id,
+            'buy',
+            ctx.session?.currentWallet || 'wallet1'
+          );
+
+          const buttons = createTradingButtons(chainName);
+          const inlineKeyboard = Markup.inlineKeyboard(buttons);
+
           await ctx.telegram.editMessageText(
             ctx.chat.id,
             scanningMsg.message_id,
             null,
-            '❌ Error scanning token. Please try again later.'
+            message,
+            {
+              parse_mode: 'Markdown',
+              ...inlineKeyboard
+            }
           );
+
+        } catch (error) {
+          console.error('Error scanning token:', error);
+          if (scanningMsg) {
+            await ctx.telegram.editMessageText(
+              ctx.chat.id,
+              scanningMsg.message_id,
+              null,
+              '❌ Error scanning token. Please try again later.'
+            );
+          }
         }
       }
     }
+
   } catch (error) {
     console.error('Error in text handler:', error);
     await ctx.reply('❌ An error occurred. Please try again.');
