@@ -333,9 +333,24 @@ function isValidUrl(string) {
     try {
       await ctx.answerCbQuery();
       
-      const position = ctx.session?.positions?.[ctx.session.currentPositionIndex];
-      if (!position) {
-        return ctx.reply('❌ Position not found');
+      // Check if we're in position view or regular token view
+      let tokenAddress, chain;
+      
+      if (ctx.session?.positions && ctx.session.positions.length > 0 && 
+          typeof ctx.session.currentPositionIndex !== 'undefined') {
+        // Position mode
+        const position = ctx.session.positions[ctx.session.currentPositionIndex];
+        if (!position) {
+          return ctx.reply('❌ Position not found');
+        }
+        tokenAddress = position.token_address;
+        chain = position.chain;
+      } else if (ctx.session?.lastScan?.result) {
+        // Regular token scan mode
+        tokenAddress = ctx.session.lastScan.address;
+        chain = ctx.session.lastScan.result.chain;
+      } else {
+        return ctx.reply('❌ Please scan a token first');
       }
 
       const amount = action.replace('buy_', '');
@@ -345,11 +360,11 @@ function isValidUrl(string) {
       const settings = await axios.get(`${BASE_URL}/wallet/evm/settings/${ctx.from.id}/${currentWallet}`);
       const { slippage = 10, gas_limit = 500000 } = settings.data.settings;
 
-      // Setup trade using position data
+      // Setup trade
       ctx.session.pendingTrade = {
-        tokenAddress: position.token_address,
+        tokenAddress: tokenAddress,
         mode: 'buy',
-        chain: position.chain,
+        chain: chain.toUpperCase(),
         slippage: slippage,
         gasLimit: gas_limit
       };
@@ -357,7 +372,7 @@ function isValidUrl(string) {
       await executeTrade(ctx, amount, 'buy');
 
     } catch (error) {
-      console.error('Error processing position buy:', error);
+      console.error('Error processing buy:', error);
       ctx.reply('❌ Error processing buy. Please try again.');
     }
   });
@@ -481,84 +496,101 @@ function createTradingButtons(chainName, tradeMode = 'buy', currentWallet = 'wal
 
 // Handle custom amount input
 async function handleCustomAmount(ctx, mode, token, chain) {
-    try {
-        const response = await axios.get(`${BASE_URL}/wallet/evm/${ctx.from.id}`);
-        const wallets = response.data;
-        
-        if (!wallets || wallets.length === 0) {
-            return ctx.reply('❌ Please set up a wallet first using the /wallet command');
-        }
-
-        ctx.session.pendingTrade = {
-            tokenAddress: token,
-            mode: mode,
-            chain: chain
-        };
-
-        if (mode === 'sell') {
-            const tokenBalances = await getTokenBalances(ctx.from.id, token, chain);
-            ctx.session.pendingTrade.tokenBalance = tokenBalances[0]?.balance || '0';
-            ctx.session.pendingTrade.tokenSymbol = tokenBalances[0]?.symbol || '';
-        }
-
-        const walletButtons = wallets.map(wallet => ([
-            Markup.button.callback(
-                `👛 ${wallet.name}`, 
-                `select_wallet_${mode}_${wallet.name}`
-            )
-        ]));
-
-        const keyboard = Markup.inlineKeyboard([
-            ...walletButtons,
-            [Markup.button.callback('❌ Cancel', 'cancel')]
-        ]);
-
-        const message = mode === 'sell' 
-            ? `👛 Select wallet to sell from:`
-            : '👛 Select wallet to use:';
-
-        await ctx.reply(message, keyboard);
-    } catch (error) {
-        console.error('Error handling custom amount:', error);
-        ctx.reply('❌ Error processing request. Please try again.');
+  try {
+    const response = await axios.get(`${BASE_URL}/wallet/evm/${ctx.from.id}`);
+    const wallets = response.data;
+    
+    if (!wallets || wallets.length === 0) {
+      return ctx.reply('❌ Please set up a wallet first using the /wallet command');
     }
+
+    ctx.session.pendingTrade = {
+      tokenAddress: token,
+      mode: mode,
+      chain: chain
+    };
+
+    if (mode === 'sell') {
+      const tokenBalances = await getTokenBalances(ctx.from.id, token, chain);
+      ctx.session.pendingTrade.tokenBalance = tokenBalances[0]?.balance || '0';
+      ctx.session.pendingTrade.tokenSymbol = tokenBalances[0]?.symbol || '';
+    }
+
+    const walletButtons = wallets.map(wallet => ([
+      Markup.button.callback(
+        `👛 ${wallet.name}`, 
+        `select_wallet_${mode}_${wallet.name}`
+      )
+    ]));
+
+    const keyboard = Markup.inlineKeyboard([
+      ...walletButtons,
+      [Markup.button.callback('❌ Cancel', 'cancel')]
+    ]);
+
+    const message = mode === 'sell' 
+      ? `👛 Select wallet to sell from:`
+      : '👛 Select wallet to use:';
+
+    await ctx.reply(message, keyboard);
+  } catch (error) {
+    console.error('Error handling custom amount:', error);
+    ctx.reply('❌ Error processing request. Please try again.');
+  }
 }
 
-
-// Add this to the bot action handlers
+// Also update the ape_max handler to work similarly
 bot.action('ape_max', async (ctx) => {
   try {
     await ctx.answerCbQuery();
     
-    if (!ctx.session?.lastScan?.result) {
-      return ctx.reply('❌ Please scan a token first.');
+    let tokenAddress, chain;
+    
+    // Check if we're in position view or regular token view
+    if (ctx.session?.positions && ctx.session.positions.length > 0 && 
+        typeof ctx.session.currentPositionIndex !== 'undefined') {
+      // Position mode
+      const position = ctx.session.positions[ctx.session.currentPositionIndex];
+      if (!position) {
+        return ctx.reply('❌ Position not found');
+      }
+      tokenAddress = position.token_address;
+      chain = position.chain;
+    } else if (ctx.session?.lastScan?.result) {
+      // Regular token scan mode
+      tokenAddress = ctx.session.lastScan.address;
+      chain = ctx.session.lastScan.result.chain;
+    } else {
+      return ctx.reply('❌ Please scan a token first');
     }
 
-    const scanResult = ctx.session.lastScan.result;
     const userId = ctx.from.id;
+    const currentWallet = ctx.session?.currentWallet || 'wallet1';
 
     // Get wallet balances
-    const walletBalances = await getWalletBalances(userId, scanResult.chain);
+    const walletBalances = await getWalletBalances(userId, chain);
     
     if (!walletBalances || walletBalances.length === 0) {
       return ctx.reply('❌ No wallets found. Please set up a wallet first.');
     }
 
-    // Calculate 90% of the balance
-    const selectedWallet = walletBalances[0]; // Assuming wallet 1 is selected
+    // Find the current wallet
+    const selectedWallet = walletBalances.find(w => w.name === currentWallet) || walletBalances[0];
     const balance = parseFloat(selectedWallet.balance);
+    
+    // Calculate 90% of the balance for "ape max"
     const amount = balance * 0.9;
 
     ctx.session.pendingTrade = {
-      tokenAddress: ctx.session.lastScan.address,
+      tokenAddress: tokenAddress,
       mode: 'buy',
-      chain: scanResult.chain.toUpperCase(),
+      chain: chain.toUpperCase(),
       wallet: selectedWallet
     };
 
     // Get slippage and gas settings from the API
-    const settings = await axios.get(`https://fets-database.onrender.com/api/future-edge/wallet/evm/settings/${userId}/wallet1`);
-    const { slippage, gas_limit } = settings.data.settings;
+    const settings = await axios.get(`${BASE_URL}/wallet/evm/settings/${userId}/${currentWallet}`);
+    const { slippage = 10, gas_limit = 500000 } = settings.data.settings;
 
     // Execute the trade with 90% of the balance
     await executeTrade(ctx, amount.toString(), 'buy', slippage, gas_limit);
@@ -568,6 +600,8 @@ bot.action('ape_max', async (ctx) => {
     ctx.reply('❌ Error processing ape max. Please try again.');
   }
 });
+
+
 
 
 async function createPositionButtons(ctx, position, currentWallet = 'wallet1') {
@@ -1251,86 +1285,87 @@ async function executeTrade(ctx, amount, action = 'buy') {
 }
 
 ['buy_custom', 'sell_custom'].forEach(action => {
-    bot.action(action, async (ctx) => {
-      try {
-        await ctx.answerCbQuery();
-        
-        const mode = action.split('_')[0]; // 'buy' or 'sell'
-        const currentWallet = ctx.session?.currentWallet || 'wallet1';
-        
-        // Check if we're in position view or regular token view
-        let tokenAddress, chain;
-        if (ctx.session?.positions) {
-          // Position mode
-          const position = ctx.session.positions[ctx.session.currentPositionIndex];
-          if (!position) {
-            return ctx.reply('❌ Position not found');
-          }
-          tokenAddress = position.token_address;
-          chain = position.chain;
-        } else if (ctx.session?.lastScan?.result) {
-          // Regular token mode
-          tokenAddress = ctx.session.lastScan.address;
-          chain = ctx.session.lastScan.result.chain;
-        } else {
-          return ctx.reply('❌ Please scan a token first');
+  bot.action(action, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      const mode = action.split('_')[0]; // 'buy' or 'sell'
+      const currentWallet = ctx.session?.currentWallet || 'wallet1';
+      
+      // Check if we're in position view or regular token view
+      let tokenAddress, chain;
+      if (ctx.session?.positions && ctx.session.positions.length > 0 && 
+          typeof ctx.session.currentPositionIndex !== 'undefined') {
+        // Position mode - with proper validation
+        const position = ctx.session.positions[ctx.session.currentPositionIndex];
+        if (!position) {
+          return ctx.reply('❌ Position not found');
         }
-  
-        // Get wallet balance for validation
-        const walletBalances = await getWalletBalances(ctx.from.id, chain);
-        const currentWalletBalance = walletBalances.find(w => w.name === currentWallet);
-        const walletBalance = parseFloat(currentWalletBalance?.balance || '0');
-  
-        // If selling, check token balance
-        if (mode === 'sell') {
-          const tokenBalances = await getTokenBalances(ctx.from.id, tokenAddress, chain);
-          const tokenBalance = tokenBalances.find(b => b.rawBalance > 0);
-          if (!tokenBalance || tokenBalance.rawBalance <= 0) {
-            return ctx.reply('❌ No token balance found');
-          }
-          ctx.session.tokenBalance = tokenBalance;
-        }
-  
-        // Store data for the trade
-        ctx.session.pendingTrade = {
-          tokenAddress: tokenAddress,
-          mode: mode,
-          chain: chain
-        };
-  
-        // Create appropriate prompt message
-        const displayChainName = chain.toLowerCase() === 'bsc' ? 'BNB' : 'ETH';
-        let promptMessage;
-        
-        if (mode === 'buy') {
-          promptMessage = `💰 Enter amount of ${displayChainName} to buy (max ${walletBalance}):\n` +
-                         `Example: 0.1 for 0.1 ${displayChainName}`;
-        } else {
-          const tokenSymbol = ctx.session.tokenBalance.symbol;
-          promptMessage = `💰 Enter amount of ${tokenSymbol} to sell or use percentage (e.g., "50%"):\n` +
-                         `Available: ${formatNumberWithCommas(ctx.session.tokenBalance.balance)} ${tokenSymbol}`;
-        }
-  
-        // Send prompt with forced reply
-        const message = await ctx.reply(promptMessage, {
-          reply_markup: { force_reply: true, selective: true }
-        });
-  
-        // Set up trade state
-        ctx.session.tradeState = {
-          waitingForAmount: true,
-          action: mode,
-          messageId: message.message_id,
-          wallet: currentWallet,
-          maxBalance: mode === 'buy' ? walletBalance : ctx.session.tokenBalance.balance
-        };
-  
-      } catch (error) {
-        console.error(`Error processing custom ${action.split('_')[0]}:`, error);
-        ctx.reply('❌ Error processing request. Please try again.');
+        tokenAddress = position.token_address;
+        chain = position.chain;
+      } else if (ctx.session?.lastScan?.result) {
+        // Regular token mode
+        tokenAddress = ctx.session.lastScan.address;
+        chain = ctx.session.lastScan.result.chain;
+      } else {
+        return ctx.reply('❌ Please scan a token first');
       }
-    });
+      
+      // Get wallet balance for validation
+      const walletBalances = await getWalletBalances(ctx.from.id, chain);
+      const currentWalletBalance = walletBalances.find(w => w.name === currentWallet);
+      const walletBalance = parseFloat(currentWalletBalance?.balance || '0');
+      
+      // If selling, check token balance
+      if (mode === 'sell') {
+        const tokenBalances = await getTokenBalances(ctx.from.id, tokenAddress, chain);
+        const tokenBalance = tokenBalances.find(b => b.rawBalance > 0);
+        if (!tokenBalance || tokenBalance.rawBalance <= 0) {
+          return ctx.reply('❌ No token balance found');
+        }
+        ctx.session.tokenBalance = tokenBalance;
+      }
+      
+      // Store data for the trade
+      ctx.session.pendingTrade = {
+        tokenAddress: tokenAddress,
+        mode: mode,
+        chain: chain
+      };
+      
+      // Create appropriate prompt message
+      const displayChainName = chain.toLowerCase() === 'bsc' ? 'BNB' : 'ETH';
+      let promptMessage;
+      
+      if (mode === 'buy') {
+        promptMessage = `💰 Enter amount of ${displayChainName} to buy (max ${walletBalance}):\n` +
+                       `Example: 0.1 for 0.1 ${displayChainName}`;
+      } else {
+        const tokenSymbol = ctx.session.tokenBalance.symbol;
+        promptMessage = `💰 Enter amount of ${tokenSymbol} to sell or use percentage (e.g., "50%"):\n` +
+                       `Available: ${formatNumberWithCommas(ctx.session.tokenBalance.balance)} ${tokenSymbol}`;
+      }
+      
+      // Send prompt with forced reply
+      const message = await ctx.reply(promptMessage, {
+        reply_markup: { force_reply: true, selective: true }
+      });
+      
+      // Set up trade state
+      ctx.session.tradeState = {
+        waitingForAmount: true,
+        action: mode,
+        messageId: message.message_id,
+        wallet: currentWallet,
+        maxBalance: mode === 'buy' ? walletBalance : ctx.session.tokenBalance.balance
+      };
+     
+    } catch (error) {
+      console.error(`Error processing custom ${action.split('_')[0]}:`, error);
+      ctx.reply('❌ Error processing request. Please try again.');
+    }
   });
+});
 
 
 
