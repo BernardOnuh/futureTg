@@ -17,11 +17,17 @@ const ERC20_ABI = [
     "function name() external view returns (string)"
 ];
 
-// Network Configurations using your existing environment variables
+// Default RPC fallbacks if env vars are not set
+const DEFAULT_ETH_RPC = "https://ethereum.publicnode.com";
+const DEFAULT_BSC_RPC = "https://bsc-dataseed1.binance.org/";
+
+// Network Configurations with proper fallbacks for RPC URLs
 const NETWORKS = {
     ETH: {
         name: 'Ethereum',
-        rpc: `https://eth-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+        rpc: process.env.ALCHEMY_API_KEY 
+            ? `https://eth-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`
+            : (process.env.ETH_RPC_URL || DEFAULT_ETH_RPC),
         chainId: 1,
         nativeCurrency: 'ETH',
         addresses: {
@@ -39,7 +45,7 @@ const NETWORKS = {
     },
     BSC: {
         name: 'BSC',
-        rpc: process.env.QUICKNODE_BSC_URL,
+        rpc: process.env.QUICKNODE_BSC_URL || DEFAULT_BSC_RPC,
         chainId: 56,
         nativeCurrency: 'BNB',
         addresses: {
@@ -57,13 +63,22 @@ const NETWORKS = {
     }
 };
 
+// Direct exports for provider initialization
+const ETH_RPC_URL = NETWORKS.ETH.rpc;
+const BSC_RPC_URL = NETWORKS.BSC.rpc;
+
+console.log('Ethereum RPC URL:', ETH_RPC_URL);
+console.log('BSC RPC URL:', BSC_RPC_URL);
+
 module.exports = {
     TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
     EVA_API_KEY: process.env.EVA_API_KEY,
     EVA_API_BASE_URL: process.env.EVA_API_BASE_URL,
-    BASE_URL: process.env.BASE_URL,
+    BASE_URL: process.env.BASE_URL || 'https://fets-database.onrender.com/api/future-edge',
     ALCHEMY_API_KEY: process.env.ALCHEMY_API_KEY,
     QUICKNODE_BSC_URL: process.env.QUICKNODE_BSC_URL,
+    ETH_RPC_URL,
+    BSC_RPC_URL,
     NETWORKS,
     ROUTER_V2_ABI,
     ERC20_ABI

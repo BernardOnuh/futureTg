@@ -14,43 +14,175 @@ module.exports = {
 
   async startCommand(ctx) {
     try {
+      const telegramId = ctx.from.id.toString();
       const firstName = ctx.from.first_name || 'User';
+      
+      // Check if user already exists and has wallets
+      let walletStatus = "Connected";
+      let loadingMessage = null;
+      let walletsCreated = false;
+      
+      try {
+        // First check if user exists by trying to get their wallets
+        const walletResponse = await axios.get(`${BASE_URL}/wallet/evm/${telegramId}`);
+        const userWallets = walletResponse.data;
+        
+        // If we got an empty array, user exists but has no wallets
+        // If we get no response or error, user might not exist
+        if (!userWallets || userWallets.length === 0) {
+          // Show loading message while setting up
+          loadingMessage = await ctx.reply('🔄 Setting up your account...');
+          
+          // Create wallet 1
+          const wallet1 = ethers.Wallet.createRandom();
+          const wallet1Data = {
+            telegram_id: telegramId,
+            name: 'wallet1',
+            address: wallet1.address,
+            private_key: wallet1.privateKey,
+            seed_phrase: wallet1.mnemonic?.phrase || 'No mnemonic available',
+            settings: {
+              slippage: 10,
+              gas_limit: 500000
+            }
+          };
+  
+          // Create wallet 2
+          const wallet2 = ethers.Wallet.createRandom();
+          const wallet2Data = {
+            telegram_id: telegramId,
+            name: 'wallet2',
+            address: wallet2.address,
+            private_key: wallet2.privateKey,
+            seed_phrase: wallet2.mnemonic?.phrase || 'No mnemonic available',
+            settings: {
+              slippage: 10,
+              gas_limit: 500000
+            }
+          };
+  
+          // Create wallets - this will also create the user if they don't exist
+          // The walletController.createEvmWallet handles user creation if needed
+          await axios.post(`${BASE_URL}/wallet/evm`, wallet1Data);
+          await axios.post(`${BASE_URL}/wallet/evm`, wallet2Data);
+          
+          // Generate and store a referral code for new users
+          try {
+            await axios.post(`${BASE_URL}/wallet/generateReferral/${telegramId}`);
+          } catch (refError) {
+            console.log('Error generating referral code:', refError);
+            // Non-critical, continue without referral code
+          }
+          
+          walletsCreated = true;
+        }
+      } catch (error) {
+        // Check if this is a "user not found" error
+        if (error.response && error.response.status === 404) {
+          // User doesn't exist, we'll create them with wallets
+          try {
+            loadingMessage = await ctx.reply('🔄 Creating your account...');
+            
+            // Create wallet 1
+            const wallet1 = ethers.Wallet.createRandom();
+            const wallet1Data = {
+              telegram_id: telegramId,
+              name: 'wallet1',
+              address: wallet1.address,
+              private_key: wallet1.privateKey,
+              seed_phrase: wallet1.mnemonic?.phrase || 'No mnemonic available',
+              settings: {
+                slippage: 10,
+                gas_limit: 500000
+              }
+            };
+  
+            // Create wallet 2
+            const wallet2 = ethers.Wallet.createRandom();
+            const wallet2Data = {
+              telegram_id: telegramId,
+              name: 'wallet2',
+              address: wallet2.address,
+              private_key: wallet2.privateKey,
+              seed_phrase: wallet2.mnemonic?.phrase || 'No mnemonic available',
+              settings: {
+                slippage: 10,
+                gas_limit: 500000
+              }
+            };
+  
+            // First wallet creation will create the user
+            await axios.post(`${BASE_URL}/wallet/evm`, wallet1Data);
+            await axios.post(`${BASE_URL}/wallet/evm`, wallet2Data);
+            
+            walletsCreated = true;
+          } catch (createError) {
+            console.error('Error creating user with wallets:', createError);
+            walletStatus = "Error ❌";
+          }
+        } else {
+          console.error('Error checking user existence:', error);
+          walletStatus = "Error ❌";
+        }
+      }
+      
+      // Delete loading message if it exists
+      if (loadingMessage) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, loadingMessage.message_id).catch(() => {});
+      }
+  
       const Homekeyboard = Markup.inlineKeyboard([
         [
-          Markup.button.callback(`📈Buy&Sell`, 'buy&sell'),
-          Markup.button.callback(`👝Wallet`, 'wallet'),
+          Markup.button.callback(`📈 Buy & Sell`, 'buy&sell'),
+          Markup.button.callback(`👝 Wallet`, 'wallet'),
         ],
         [
-          Markup.button.callback(`📊Positions`, 'show_positions_message'),
-          Markup.button.callback(`⚙️Settings`, 'settings'),
+          Markup.button.callback(`📊 Positions`, 'show_positions_message'),
+          Markup.button.callback(`⚙️ Settings`, 'settings'),
         ],
         [
-          Markup.button.callback(`🚨Token Scanner`, 'scanner'),
-          Markup.button.callback(`📤Transfer`, 'transfer'),
+          Markup.button.callback(`🔍 Token Scanner`, 'scanner'),
+          Markup.button.callback(`📤 Transfer`, 'transfer'),
         ],
       ]);
-
-      const ethPriceResponse = await api.getTokenDetails('0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2');
-      const bscPriceResponse = await api.getTokenDetails('9gP2kCy3wA1ctvYWQk75guqXuHfrEomqydHLtcTCqiLa');
-
-      const ethPrice = ethPriceResponse.pairs.length > 0 ? ethPriceResponse.pairs[0].priceUsd.toFixed(2) : 'N/A';
-      const bscPrice = bscPriceResponse.pairs.length > 0 ? bscPriceResponse.pairs[0].priceUsd.toFixed(2) : 'N/A';
-
+  
+      // Fetch token prices for ETH and BNB
+      const [ethPriceResponse, bscPriceResponse] = await Promise.all([
+        api.getTokenDetails('0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'),
+        api.getTokenDetails('0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c')
+      ]).catch(error => {
+        console.error('Error fetching token prices:', error);
+        return [{ pairs: [] }, { pairs: [] }];
+      });
+  
+      const ethPrice = ethPriceResponse.pairs?.length > 0 ? ethPriceResponse.pairs[0].priceUsd.toFixed(2) : 'N/A';
+      const bscPrice = bscPriceResponse.pairs?.length > 0 ? bscPriceResponse.pairs[0].priceUsd.toFixed(2) : 'N/A';
+  
       ctx.replyWithMarkdown(
-        `👋*Welcome* ${firstName} to Future Edge Trading Bot! \n\n` +
-        `The *Fastest*⚡ and most *Reliable*🛡️ \n` +
-        `🥏 Token Scanner \n\n` +
-        `🥏 Trade Bot \n\n` +
-        `Paste📝 any Token Contract Address on *Eth || Bsc* on this bot to Scan & Trade \n\n` +
-        `*Eth || Bsc* \n\n` +
-        `Wallet:*Connected*\n\n` +
-        `Price $${ethPrice}(ETH/USDT) \n\n` +
-        `Price $${bscPrice}(BNB/USDT) \n\n`,
+        `👋 *Welcome ${firstName} to Future Edge Trading Bot!* \n\n` +
+        `The *Fastest* ⚡ and most *Reliable* 🛡️ \n` +
+        `🔍 Token Scanner \n` +
+        `💱 Trading Bot \n\n` +
+        `Paste 📝 any Token Contract Address on *ETH or BSC* to Scan & Trade\n\n` +
+        `*Market Prices:*\n` +
+        `- ETH: $${ethPrice}\n` +
+        `- BNB: $${bscPrice}\n\n` +
+        `*Wallet Status:* ${walletsCreated ? "Created ✅" : walletStatus}`,
         Homekeyboard
       );
+      
+      // If we just created wallets, add a short delay then show message
+      if (walletsCreated) {
+        setTimeout(async () => {
+          await ctx.reply(
+            "✅ Your wallets have been automatically created. Use the 👝 Wallet button to manage them and view your wallet addresses."
+          );
+        }, 2000);
+      }
+      
     } catch (error) {
-      console.error('Error:', error.message);
-      ctx.reply('Error processing the request. Please try again later.');
+      console.error('Error in start command:', error);
+      ctx.reply('Error processing your request. Please try again later.');
     }
   },
 
